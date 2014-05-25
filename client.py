@@ -229,6 +229,10 @@ class Client():
 		# flush the write holds on our side
 		self.wholds = []
 		
+		if discard is False and block is False:
+			raise Exception('DISCARD IS FALSE')
+			
+		
 		if discard and block is False:
 			# discard the write reply when it arrives
 			self.vexecuted[vector] = True
@@ -296,12 +300,19 @@ class Client():
 			raise OperationException()
 		return ret
 		
-	def WriteAddLoop(self, offset, jump, count, data, block = True):
+	def WriteAddLoop(self, offset, jump, count, data, block = True, discard = True, ticknet = False):
 		self.DoBlockingLinkSetup()
 			
 		_data = struct.pack('>BQQQ', PktCodeClient.WriteAddLoop, offset, jump, count) + data
 		data, vector = BuildEncryptedMessage(self.link, _data)
 		self.outgoing[vector] = (vector, 0, data, self.crypter, _data)
+
+		if discard and block is False:
+			# discard the write reply when it arrives
+			self.vexecuted[vector] = True
+			
+		if block is False and ticknet is False:
+			return
 		
 		if block is False:
 			vector = None
@@ -317,7 +328,7 @@ class Client():
 		If non-blocking:
 			Will return None
 	'''
-	def Read(self, offset, length, block = True, cache = True, ticknet = False):
+	def Read(self, offset, length, block = True, cache = True, ticknet = False, discard = True):
 		self.DoBlockingLinkSetup()
 		
 		# it does not make sense to do non-blocking I/O when you
@@ -331,11 +342,15 @@ class Client():
 		data, vector = BuildEncryptedMessage(self.link, _data)
 		self.outgoing[vector] = (vector, 0, data, self.crypter, _data)
 		
-		if block is False:
-			vector = None
+		if discard and block is False:
+			# discard the write reply when it arrives
+			self.vexecuted[vector] = True
 			
 		if block is False and tickned is False:
 			return
+		
+		if block is False:
+			vector = None
 			
 		ret = self.HandlePackets(getvector = vector)
 		if block and ret is None:
@@ -402,6 +417,8 @@ class Client():
 		return len(self.outgoing)
 	def SetVectorExecutedWarningLimit(self, limit):
 		self.vexecwarnlimit = limit
+	def GetVectorExecutedWarningLimit(self):
+		return self.vexecwarnlimit
 	def HandlePackets(self, getvector = None):
 		ter = time.time()
 		
@@ -511,6 +528,7 @@ class Client():
 					break
 				encrypted, data, svector = ProcessRawSocketMessage(self.link, data)
 
+				print('encrypted:%s' % encrypted)
 				# let the server know we got the packet
 				if encrypted is None:
 					# packet was bad, encrypted is None because we have no
@@ -520,6 +538,7 @@ class Client():
 				if encrypted is True:
 					#print('acking vector:%s' % svector)
 					_data, _tmp = BuildEncryptedMessage(self.link, struct.pack('>BQ', PktCodeClient.Ack, svector))
+					print('ACK vector:%s' % svector)
 					self.sock.send(_data)
 					
 				#print('encrypted:%s data-len:%s svector:%s' % (encrypted, len(data), svector))
@@ -546,20 +565,18 @@ class Client():
 					
 					if match is True:
 						# blocking call
-						self.x = self.x + 1
-						if self.x > 100:
-							raise Exception()
-						#print('blocking return')
 						return ret
 					else:
 						# non-blocking call (stores result)
 						if vector is not None:
-							if vector in self.vexecuted and self.vexecuted[vector] is True:
+							if vector in self.vexecuted:
 								# it was specified to discard results
 								del self.vexecuted[vector]
 							else:
 								# do not discard results, but store them
 								print('added to vexecuted for vector:%s' % vector)
+								#print(ret)
+								#raise Exception('LOL')
 								self.vexecuted[vector] = ret
 					# end-of-is-match-if-statement
 				# end-of-is-vector-good-if-statement
@@ -578,7 +595,7 @@ class Client():
 	def HandlePacket(self, data, getvector = None):
 		type = data[0]
 		data = data[1:]
-		#print('-->type:%s' % type)
+		print('-->type:%s' % type)
 		if 		type == PktCodeServer.PublicKey:
 			print('got public key')
 			# we got public key, now setup the encryption
@@ -782,11 +799,15 @@ class SimpleFS(Client):
 		tpb = 0
 		tpbc = 0
 		
+		self.SetVectorExecutedWarningLimit(2048)
+		
 		segments = []
 		while True:
 			# let the network do anything it needs to do
-			self.HandlePackets()
+			while self.GetOutstandingCount() >= 100:
+				self.HandlePackets()
 		
+			print('ALLOCATING SEGMENT')
 			sz = random.randint(1, 1024 * 1024 * 100)
 			
 			st = time.time()
