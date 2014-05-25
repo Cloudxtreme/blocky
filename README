@@ -13,7 +13,7 @@
 Can I Use It?
 	At the moment the answer is partially, and depends on if you are a developer or a casual user. As a casual user you would want to wait for the client to become implemented and stablized. For a developer you could get started early working on your own client, or with (or based from) the standard client.
 	
-	The client is currently in the alpha development stage and is only partially implemented. You CAN write your own client using the standard client as a reference and the server should currently be fully usable. The server is in the beta development stage meaning it is fully implemented and stable. 
+	The client is currently in the alpha development stage and is only partially implemented. You CAN write your own client using the standard client as a reference and the server should currently be fully usable. The server is in the beta development stage meaning it is fully implemented but may not be stable.
 	
 Where Is The Server?
 	The server is (or should be) currently online and located at kmcg3413.net on port 1874. You can use any block ID and it will be created on the server with 50MB of space. You may create multiple blocks, but please refrain from trying to over-run the server with blocks. The blocks may also be deleted at any time I see fit so only use them for testing.
