@@ -99,12 +99,23 @@ class VectorMan:
 		self.high = 100
 		self.irange = []
 		
-	def IsVectorGood(self, vector):
+	def IsVectorGood(self, vector, max = None):
 		irange = self.irange
 		for ir in irange:
 			if vector >= ir.begin and vector <= ir.end:
 				print('used vector:%s' % vector)
 				return False
+		# okay we have a problem we have too many ranges, and the reason
+		# we watch this is because someone could DoS the server's memory
+		# by filling up the irange table so now we have to make a decision
+		# if this vector will add with a range then we allow it and if it
+		# does not then we report it as a bad vector
+		if max is not None and len(irange) > max:
+			# if it adds it we will get True returned so everything is
+			# okay
+			if self.TryAddingVectorToRange(vector) is False:
+				return False
+			
 		return True
 	'''
 		this function needs improvement so that we are not
@@ -116,22 +127,24 @@ class VectorMan:
 		
 		TODO: improve this situation
 	'''
-	def MarkVectorUsed(self, vector):
+	def TryAddingVectorToRange(self, vector):
 		irange = self.irange
+		added = False
 		# find range we can append onto
 		_ir = None
 		for ir in irange:
 			if vector + 1 == ir.begin:
 				ir.begin = ir.begin - 1
 				_ir = ir
+				added = True
 				break
 			if vector - 1 == ir.end:
 				ir.end = ir.end + 1
 				_ir = ir
+				added = True
 				break
-		
-		# try to combine range we just added to with another
-		if _ir is not None:
+		if added:
+			# try to combine range we just added to with another
 			for ir in irange:
 				if _ir.end + 1 == ir.begin:
 					ir.begin = _ir.begin
@@ -141,7 +154,13 @@ class VectorMan:
 					ir.end = _ir.end
 					irange.remove(ir)
 					break
-		else:
+			return True
+		return False
+		
+	def MarkVectorUsed(self, vector):
+		irange = self.irange
+		
+		if self.TryAddingVectorToRange(vector) is False:
 			irange.append(VectorManEntry(vector, vector))
 	
 	def IsRangeTooMany(self, max):
@@ -163,6 +182,9 @@ def BuildEncryptedMessage(link, data):
 	_vector = vman.GetNewVector()
 	vector = struct.pack('>Q', _vector)
 	data = vector + data
+	
+	#if _vector == 1117:
+	#	raise Exception('LOL')
 	
 	# hash vector and data
 	m = hashlib.sha512()
