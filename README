@@ -4,43 +4,132 @@
 		
 		1. Can I Use It?
 		2. Where Is The Server?
-		2. What Kind Of License Is It Under?
-		3. What Is It?
-		4. What Can It Do?
-		5. How Does It Work?
-		6. What Is The Finished Client Intended To Do?
+		3. What Kind Of License Is It Under?
+		4. What Is It?
+		5. What Can It Do?
+		6. What Can It Do In Terms Of Security?
+		7. How Does It Work?
+		8. What Is The Finished Client Intended To Do?
 													
 Can I Use It?
-	At the moment the answer is partially, and depends on if you are a developer or a casual user. As a casual user you would want to wait for the client to become implemented and stablized. For a developer you could get started early working on your own client, or with (or based from) the standard client.
+	At the moment the answer is partially, and depends on if you are
+	a developer or a casual user. As a casual user you would want to
+	wait for the client to become implemented and stablized. For a
+	developer you could get started early working on your own client,
+	or with (or based from) the standard client.
 	
-	The client is currently in the alpha development stage and is only partially implemented. You CAN write your own client using the standard client as a reference and the server should currently be fully usable. The server is in the beta development stage meaning it is fully implemented but may not be stable.
+	The client is currently in the alpha development stage and is
+	only partially implemented. You CAN write your own client using
+	the standard client as a reference and the server should currently
+	be fully usable. The server is in the beta development stage
+	meaning it is fully implemented but may not be stable.
 	
 Where Is The Server?
-	The server is (or should be) currently online and located at kmcg3413.net on port 1874. You can use any block ID and it will be created on the server with 50MB of space. You may create multiple blocks, but please refrain from trying to over-run the server with blocks. The blocks may also be deleted at any time I see fit so only use them for testing.
+	The server is (or should be) currently online and located at
+	kmcg3413.net on port 1874. You can use any block ID and it will
+	be created on the server with 50MB of space. You may create
+	multiple blocks, but please refrain from trying to over-run the
+	server with blocks. The blocks may also be deleted at any time I
+	see fit so only use them for testing.
+	
+	I have included the server source code for local testing. You
+	can use that if you prefer, but you will have to setup the
+	configuration.
 	
 What Kind Of License Is It Under?
-	The client is currently distributed under the Blocky license. You can view the Blocky license at: 
-	http://kmcg3413.net/blockylicense.txt. 
+	The client is currently distributed under the Blocky license. You
+	can view the Blocky license at: 
+	             http://kmcg3413.net/blockylicense.txt. 
 	
-	This license attempts to grant you rights to do anything you wish except make a profit from it or include it into proprietary programs. I mainly wish to do this to retain some control and would gladly grant licenses to individual and companies to do so if needed.
+	This license attempts to grant you rights to do anything you wish
+	except make a profit from it or include it into proprietary
+	programs. I mainly wish to do this to retain some control and
+	would gladly grant licenses to individual and companies to do so
+	if needed. The license also requires that you provide attribution
+	to me in anything you create from it. I am not picky but I do 
+	value having credit more than money so I think it is a fair trade.
+	
+	If you have a concern or a situation and your afraid the license
+	is too restrictive then send me a mail at kmcg3413@gmail.com
+	about the issue and I could always grant you a special license to
+	allow you to do what you wish.
 	
 What Is It?
-	The blocky system is meant to be used as a data backup or data storage service. It can however be used for other purposes such as inter-communication over the network. 
+	The blocky system is meant to be used as a data backup or data
+	storage service. It can however be used for other purposes such
+	as inter-communication over the internet/(a network). 
 
 What Can It Do?
-	It can provide high customization to specific data backup and data storage problems because of the freedom given in how data is stored on the server, and because the client is open-sourced and written in Python (cross-platform) the client can be highly customized and specialized for to provide a solution to any data backup or data storage problem. It can also be used by general computer users for home data backup and storage solutions.
+	It can provide high customization to specific data backup and
+	data storage problems because of the freedom given in how data
+	is stored on the server, and because the client is open-sourced
+	and written in Python (cross-platform) so the client can be 
+	highly customized and specialized to provide a solution to any 
+	data backup or data storage problem. It can also be used by
+	basic computer users for home data backup and storage solutions.
+	As a matter of fact one of it's primary intended purposes is
+	general data backup and data storage.
+	
+What Can It Do In Terms Of Security?
+	It can also give you the ability to easily incorporate your own
+	blend of encryption. As you know a custom encryption solution
+	on top of proven encryption technologies can make your data
+	impossible to break as your added algorithm becomes part of the
+	key if it is not known to the attacker. So for those worried
+	about security this software is a great platform for ensuring
+	that.
 
 How Does It Work?	
-	The blocky system works by exposing a virtual block device on the server to clients. To access the block device you have to know the unique ID which also serves as the username and password combination. The interface between the client and server supports many operations. All communications are encrypted using public key technology for negotiation then standard encryption for the actual data. 
+	The blocky system works by exposing a virtual block device on
+	the server to clients. To access the block device you have to
+	know the unique ID which also serves as the username and password
+	combination. The interface between the client and server supports
+	many operations. All communications are encrypted using public
+	key technology for negotiation then standard encryption for the
+	actual data. 
 
-	The virtual block size can be resized on the server. Currently, read only access is not implemented, but it is easily possible and will be highly likely to be added in future releases. If the block is resized smaller then data past that mark will be  lost. If it is made larger no data will be lost. This provides
+	The virtual block size can be resized on the server. Currently,
+	read only access is not implemented, but it is easily possible
+	and will be highly likely to be added in future releases. If the
+	block is resized smaller then data past that mark will be  lost.
+	If it is made larger no data will be lost. This provides
 
-	The unique ID is essentially a combination of a username and password. It is generally generated server side as a long combination of letters and numbers. Anyone with this ID can access your block on the blocky server. Multiple IDs can point to the same block and can provide an unlimited number of configurations such as allowing on real access, or protecting certain regions of the block from writing or reading.
+	The unique ID is essentially a combination of a username and
+	password. It is generally generated server side as a long
+	combination of letters and numbers. Anyone with this ID can
+	access your block on the blocky server. Multiple IDs can point
+	to the same block and can provide an unlimited number of
+	configurations such as allowing on real access, or protecting
+	certain regions of the block from writing or reading.
 	
-	The interface between the client and services provides the standard read and write operations. Atomic exchange operations for locking (concurrency). And special writes that can be performed when a client loses connection (to open locks for concurrency). It also supports batched write operations that have atomic executed (either they all happen or none happen). The interface was designed with having multiple client accessing the same block in blocky at the same time.
+	The interface between the client and services provides the
+	standard read and write operations. Atomic exchange operations
+	for locking (concurrency). And special writes that can be
+	performed when a client loses connection (to open locks for
+	concurrency). It also supports batched write operations that
+	have atomic executed (either they all happen or none happen). The
+	interface was designed with having multiple client accessing the
+	same block in blocky at the same time.
 	
-	The communication uses a public key handshake. On connect the client requests the public key from the server. Once it has the key it replies with a encryption key which is used for the remaining life-time of the connection. The client can choose to re-connect at any time to refresh the key. At the moment only one type of encryption is supported, but I hope soon to add the ability to choose between different encryption technologies to provide varying degrees of security and performance.
+	The communication uses a public key handshake. On connect the
+	client requests the public key from the server. Once it has the
+	key it replies with a encryption key which is used for the
+	remaining life-time of the connection. The client can choose
+	to re-connect at any time to refresh the key. At the moment only
+	one type of encryption is supported, but I hope soon to add the
+	ability to choose between different encryption technologies to
+	provide varying degrees of security and performance.
 	
 
 What Is The Finished Client Intended To Do?
-	The finished client is intended to provide casual users with a cross-platform data backup and data storage solution. It is also intended to remain open source so that users or developers can modify it to suit their needs. Such modifications are not limited to but may include backup of special data that can not be accessed in the convention manner of openining a file and reading it's contents, adding features or modifying features to better suit the selection of data for backup or storage, adding additional encryption to transmitted data, changing the way the space is used server side by modifying or implementing new file systems on the remote block on the blocky server. 
+	The finished client is intended to provide casual users with a
+	cross-platform data backup and data storage solution. It is also
+	intended to remain open source so that users or developers can
+	modify it to suit their needs. Such modifications are not limited
+	to but may include backup of special data that can not be
+	accessed in the convention manner of openining a file and reading
+	it's contents, adding features or modifying features to better
+	suit the selection of data for backup or storage, adding
+	additional encryption to transmitted data, changing the way the
+	space is used server side by modifying or implementing new file
+	systems on the remote block on the blocky server. 

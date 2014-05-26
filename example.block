@@ -1,0 +1,19 @@
+{
+	'fd': None,											# required to be None
+	'id': 'block.example',								# you have to rename this to block.example
+	'lmt': 0,											# required to be zero
+	'locks': {},										# 
+	'maxref': 10,										#
+	'mm': None,											# required to be None
+	'path': "/home/kmcguire/block.example",				# path to block data
+	'ref': 0,											# should be zero
+	'size': 52428800									# specifies the size of the block
+														# data file in bytes
+}
+'''
+	This server looks for the block meta-data file (THIS FILE) by appending
+	the block ID after "block.". So if you connected and gave the block ID
+	of "example" the server would try to load "block.example". If it failed
+	the client would be rejected. This file has been named backwards on purpose
+	so no one can connect to it. 
+'''

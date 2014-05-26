@@ -69,28 +69,15 @@ def server(lip, lport):
 	
 	blocks = {}
 	
+	if os.path.exists('sconfig.py') is False:
+		print('ERROR: You must have a "sconfig.py" file with a valid configuration.')
+
+	fd = open('sconfig.py', 'r')
+	sconfig = eval(fd.read())
+	fd.close()
 	
 	bytesin = 0
 	bytestime = time.time()
-	
-	'''
-		This is my testing block. Normally, the block meta-data
-		is loaded from the disk on a block connection request. But,
-		for testing I preload this one. It however can be removed
-		after some time of idle, but for most of my tests it wont
-		really ever go idle for now....
-	'''
-	'''
-	blocks[b'ekwL#i293828eeMDj43EKowi49382dko39#KMekoe993824'] = {
-		'fd':		None,
-		'path':		'/home/kmcguire/block.test',
-		'size':		1024 * 1024 * 500,
-		'ref':		0,
-		'id':		b'ekwL#i293828eeMDj43EKowi49382dko39#KMekoe993824',
-		'lmt':		0,
-		'locks':	{}
-	}
-	'''
 	
 	'''
 		Basically, I have to do this for the cricial section which
@@ -114,7 +101,7 @@ def server(lip, lport):
 		keypri = pubcrypt.toi256(keypri)
 	else:
 		print('[server] generating public and private key pair')
-		keypub, keypri = pubcrypt.keygen(2 ** 64)
+		keypub, keypri = pubcrypt.keygen(2 ** sconfig['public-key-bits'])
 		fd = open('pubkey', 'wb')
 		fd.write(pubcrypt.fromi256(keypub))
 		fd.close()
@@ -137,13 +124,13 @@ def server(lip, lport):
 		# ----------------- IDLE LINKS ---------------
 		# go through and drop any links that have been
 		# idle for specific amount of time or greater
-		if time.time() - llic > (60 * 5):
+		if time.time() - llic > sconfig['link-idle-check']:
 			llic = time.time()
 			_toremove = []
 			for addr in links:
 				for uid in links[addr]:
 					link = links[addr][uid]
-					if time.time() - link['lmt'] > (60 * 1):
+					if time.time() - link['lmt'] > sconfig['link-idle-drop']:
 						# see if we can drop the block that
 						# may be opened
 						block = link['block']
@@ -183,7 +170,7 @@ def server(lip, lport):
 		# but are currently loaded into memory (well block meta-data)
 		# this can happen when the customer has changed the size
 		# of the block
-		if time.time() - lbuc > (60 * 5):
+		if time.time() - lbuc > sconfig['block-update-check']:
 			lbuc = time.time()
 			for bid in blocks:
 				block = blocks[bid]
@@ -214,7 +201,7 @@ def server(lip, lport):
 					lsend = out[1]			# last send time
 					edata = out[2]			# encrypted data
 
-					if time.time() - lsend > 5:
+					if time.time() - lsend > sconfig['resend-delay']:
 						# remote client will send a ACK packet
 						# saying that they have recieved this
 						# packet which will remove it from the
@@ -280,7 +267,7 @@ def server(lip, lport):
 				# just ignore another one; i should make it send
 				# a message to alert the client that this has
 				# happened
-				if len(links[addr]) > 20:
+				if len(links[addr]) > sconfig['max-links-from-addr']:
 					continue
 				# generate unique link ID
 				uid = uidgen.ugen()
@@ -382,7 +369,7 @@ def server(lip, lport):
 				# code block; we also just ignore vectors that
 				# have already been used because sometimes they
 				# are resends
-				if link['vman'].IsVectorGood(vector, 300) is False:
+				if link['vman'].IsVectorGood(vector, sconfig['max-vector-ranges']) is False:
 					# this means the vector could not be added to
 					# the existing ranges AND it could not be added
 					# as a single because we have hit our max range
@@ -403,7 +390,6 @@ def server(lip, lport):
 					#
 					# TODO: add somekind of timeout here to prevent brute forcing
 					#
-					print('block connect')
 					nid = struct.unpack_from('>I', data)[0]
 					data = data[4:]
 					bid = data
@@ -411,23 +397,25 @@ def server(lip, lport):
 						bid = bid.decode('utf8', 'ignore')
 						# see if we load the block into memory from disk
 						bpath = 'block.%s' % bid
-						
-						# this is just temporary for demoing the server
-						if os.path.exists(bpath) is False:
-							# create it! (for demoing the service)
-							block = {
-									'fd':		None,
-									'path':		'<replaceme>',
-									'size':		1024 * 1024 * 50,
-									'ref':		0,
-									'maxref':	10,
-									'lmt':		0,
-									'locks':	{},
-									'mm':		None					
-							}
-							fd = open(bpath, 'w')
-							pprint.pprint(block, fd)
-							fd.close()
+					
+						# this creates a block on demand with a default
+						# number of bytes
+						if sconfig['create-block-free'] is True:
+							if os.path.exists(bpath) is False:
+								# create it! (for demoing the service)
+								block = {
+										'fd':		None,
+										'path':		'<replaceme>',
+										'size':		sconfig['free-block-size'],
+										'ref':		0,
+										'maxref':	sconfig['block-max-ref'],
+										'lmt':		0,
+										'locks':	{},
+										'mm':		None					
+								}
+								fd = open(bpath, 'w')
+								pprint.pprint(block, fd)
+								fd.close()
 						
 						if os.path.exists(bpath):
 							fd = open(bpath, 'r')
@@ -491,7 +479,6 @@ def server(lip, lport):
 					link['outgoing'][_tmp] = (_tmp, 0, data)
 					continue					
 				
-				#fd = block['fd']
 				mm = block['mm']
 				
 				if type == PktCodeClient.WriteHold:
