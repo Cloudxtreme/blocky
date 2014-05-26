@@ -143,7 +143,7 @@ def server(lip, lport):
 			for addr in links:
 				for uid in links[addr]:
 					link = links[addr][uid]
-					if time.time() - link['lmt'] > (60 * 5):
+					if time.time() - link['lmt'] > (60 * 1):
 						# see if we can drop the block that
 						# may be opened
 						block = link['block']
@@ -176,6 +176,7 @@ def server(lip, lport):
 				del links[e[0]][e[1]]
 				if len(links[e[0]]) < 1:
 					del links[e[0]]
+					print('dropping link %s:%s' % (e[0], e[1]))
 	
 		# --------------- UPDATED BLOCKS ----------------
 		# go through and look for blocks which have been updated
@@ -219,8 +220,8 @@ def server(lip, lport):
 						# packet which will remove it from the
 						# outgoing list
 						if lsend > 0:
-							print('RESEND vector:%s' % vector)
-							pass
+							#print('RESEND vector:%s' % vector)
+							print('*', end='')
 						outgoing[vector] = (vector, time.time(), edata)
 						sock.sendto(edata, link['addr'])
 		
@@ -340,9 +341,7 @@ def server(lip, lport):
 					# and could show when someone is messing around, but
 					# because of the openess of the client this will
 					# be expected, so I might disable this problem 
-					print(_hash)
-					print(hash)
-					raise BadHashException()
+					print('#', end='')
 				# get vector
 				'''
 					the vector prevents replay attacks where the attacker
@@ -361,6 +360,10 @@ def server(lip, lport):
 				# remove type from data sequence
 				data = data[1:]
 
+				# we do not verify vectors for acknowledgements as a replay attack
+				# can only occur after the attacker has sniffed the packet and if
+				# so getting a duplicate ack will not do anything because that vector
+				# will never be used again for the life of this link
 				if type == PktCodeClient.Ack:
 					_vector = struct.unpack_from('>Q', data)[0]
 					# remove vector from outgoing
@@ -376,14 +379,21 @@ def server(lip, lport):
 				# causing VectorMan to eat crazy amounts of
 				# memory; just throw an exception to escape
 				# as it is the easiest way to get out of this
-				# code block
-				#if link['vman'].IsRangeTooMany(300):
-				#	raise Exception('RANGE TOO MANY')
-					
+				# code block; we also just ignore vectors that
+				# have already been used because sometimes they
+				# are resends
 				if link['vman'].IsVectorGood(vector, 300) is False:
-					# vector failed so just ignore it
-					raise VectorAlreadyUsedException()
-				link['vman'].MarkVectorUsed(vector)
+					# this means the vector could not be added to
+					# the existing ranges AND it could not be added
+					# as a single because we have hit our max range
+					# limit
+					print('.', end='')
+					continue
+				
+				#if vector == 117:
+					#print('GOT VECTOR 117')
+					#while True:
+					#	pass
 				
 				# they wish to connect to a block
 				if type == PktCodeClient.BlockConnect:
@@ -428,7 +438,7 @@ def server(lip, lport):
 							# need to reload a block's meta data from disk
 							# such as when the size has been changed
 							block['lmt'] = os.path.getmtime(bpath)
-							block['path'] = '/home/kmcguire/block.%s' % (uid)
+							block['path'] = '/home/kmcguire/block.%s' % (bid)
 							print('path:%s' % block['path'])
 						else:
 							print('block file [%s] does not exist' % bpath)

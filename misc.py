@@ -103,7 +103,6 @@ class VectorMan:
 		irange = self.irange
 		for ir in irange:
 			if vector >= ir.begin and vector <= ir.end:
-				print('used vector:%s' % vector)
 				return False
 		# okay we have a problem we have too many ranges, and the reason
 		# we watch this is because someone could DoS the server's memory
@@ -111,11 +110,16 @@ class VectorMan:
 		# if this vector will add with a range then we allow it and if it
 		# does not then we report it as a bad vector
 		if max is not None and len(irange) > max:
-			# if it adds it we will get True returned so everything is
-			# okay
+			# if it can be added to a range that is great, but if not
+			# then we just consider it a bad vector
 			if self.TryAddingVectorToRange(vector) is False:
 				return False
-			
+		# see if we can add it to a range and if not make
+		# a new range
+		if self.TryAddingVectorToRange(vector) is False:
+			#print('ADDED VECTOR:%s TO IRANGE' % vector)
+			irange.append(VectorManEntry(vector, vector))
+		
 		return True
 	'''
 		this function needs improvement so that we are not
@@ -132,7 +136,9 @@ class VectorMan:
 		added = False
 		# find range we can append onto
 		_ir = None
+		#print('trying to add vector:%s to ranges' % vector)
 		for ir in irange:
+			#print('		vector:%s ir.begin:%s ir.end:%s' % (vector, ir.begin, ir.end))
 			if vector + 1 == ir.begin:
 				ir.begin = ir.begin - 1
 				_ir = ir
@@ -148,21 +154,16 @@ class VectorMan:
 			for ir in irange:
 				if _ir.end + 1 == ir.begin:
 					ir.begin = _ir.begin
-					irange.remove(ir)
+					irange.remove(_ir)
 					break
 				if _ir.begin - 1 == ir.end:
 					ir.end = _ir.end
-					irange.remove(ir)
+					irange.remove(_ir)
 					break
 			return True
+		#print('			failed to add')
 		return False
-		
-	def MarkVectorUsed(self, vector):
-		irange = self.irange
-		
-		if self.TryAddingVectorToRange(vector) is False:
-			irange.append(VectorManEntry(vector, vector))
-	
+			
 	def IsRangeTooMany(self, max):
 		if len(self.irange) > max:
 			return True
@@ -173,15 +174,19 @@ class VectorMan:
 		self.high = vector + 1
 		return vector
 				
-def BuildEncryptedMessage(link, data):
+def BuildEncryptedMessage(link, data, vector = None):
 	crypter = link['crypter']
 	vman = link['vman']
 	ulid = link['ulid']
 	
-	# add vector and data (to be hashed)
-	_vector = vman.GetNewVector()
-	vector = struct.pack('>Q', _vector)
-	data = vector + data
+	# get new vector unless provided already
+	if vector is None:
+		vector = vman.GetNewVector()
+		#if vector == 129:
+		#	raise Exception('CHECKIT')
+	# add vector and data (to be hashed)	
+	_vector = struct.pack('>Q', vector)
+	data = _vector + data
 	
 	#if _vector == 1117:
 	#	raise Exception('LOL')
@@ -201,7 +206,7 @@ def BuildEncryptedMessage(link, data):
 	data = struct.pack('>B', PktCodeClient.EncryptedMessage) + ulid + data
 	
 	# return final form
-	return (data, _vector)
+	return (data, vector)
 				
 def ProcessRawSocketMessage(link, data):	
 	# if not encrypted then just return message whole
@@ -234,7 +239,7 @@ def ProcessRawSocketMessage(link, data):
 	_hash = m.digest()
 	if _hash != hash:
 		# failed hash verification (ignore it)
-		return (False, data)
+		return (False, data, None)
 	# verify vector is valid
 	vector = struct.unpack_from('>Q', data)[0]
 	# return the actual data (which has now been decrypted and verified)

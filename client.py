@@ -230,10 +230,6 @@ class Client():
 		self.wholds = []
 		
 		if discard is False and block is False:
-			raise Exception('DISCARD IS FALSE')
-			
-		
-		if discard and block is False:
 			# discard the write reply when it arrives
 			self.vexecuted[vector] = True
 
@@ -281,7 +277,7 @@ class Client():
 		#print('sent write')
 		
 		# does not make sense to discard and block (will just fil up vexecuted)
-		if discard and block is False:
+		if discard is False and block is False:
 			# discard the write reply when it arrives
 			self.vexecuted[vector] = True
 
@@ -307,7 +303,7 @@ class Client():
 		data, vector = BuildEncryptedMessage(self.link, _data)
 		self.outgoing[vector] = (vector, 0, data, self.crypter, _data)
 
-		if discard and block is False:
+		if discard is False and block is False:
 			# discard the write reply when it arrives
 			self.vexecuted[vector] = True
 			
@@ -342,7 +338,7 @@ class Client():
 		data, vector = BuildEncryptedMessage(self.link, _data)
 		self.outgoing[vector] = (vector, 0, data, self.crypter, _data)
 		
-		if discard and block is False:
+		if discard is False and block is False:
 			# discard the write reply when it arrives
 			self.vexecuted[vector] = True
 			
@@ -458,12 +454,13 @@ class Client():
 				#	outgoing[out[0]] = (out[0], (ct - 5) + 0.1, out[2], out[3], out[4])
 				#	out = outgoing[out[0]]
 				
-				if ct - out[1] > 1:
+				if ct - out[1] > 5:
 					if out[1] > 0:
 						#print('resend vector:%s' % vector)
 						pass
 					# it has been too long so resend it
 					if self.crypter != out[3]:
+						raise Exception('DEBUG')
 						# re-encrypt the data
 						data, vector = BuildEncryptedMessage(self.link, out[4])
 						#outgoing[vector] = (vector, out[1], data, self.crypter, data[4])
@@ -528,7 +525,6 @@ class Client():
 					break
 				encrypted, data, svector = ProcessRawSocketMessage(self.link, data)
 
-				print('encrypted:%s' % encrypted)
 				# let the server know we got the packet
 				if encrypted is None:
 					# packet was bad, encrypted is None because we have no
@@ -536,18 +532,13 @@ class Client():
 					continue
 				
 				if encrypted is True:
-					#print('acking vector:%s' % svector)
-					_data, _tmp = BuildEncryptedMessage(self.link, struct.pack('>BQ', PktCodeClient.Ack, svector))
-					print('ACK vector:%s' % svector)
+					# we dont use vectors for acks because they may
+					# get lost and we do not track them so vectors
+					# would get lost and fill up the server's vector
+					# ranges making the connection unusable
+					_data, _tmp = BuildEncryptedMessage(self.link, struct.pack('>BQ', PktCodeClient.Ack, svector), vector = 0)
 					self.sock.send(_data)
-					
-				#print('encrypted:%s data-len:%s svector:%s' % (encrypted, len(data), svector))
-				# if encrypted then make sure vector is valid (prevent replay attack and duplicate
-				# processing), if not encrypted then just handle it like normal
-				if self.link['vman'].IsVectorGood(svector) is False:
-					print('vector not good')
-					continue
-				
+									
 				if encrypted is False or self.link['vman'].IsVectorGood(svector) is True:
 					# continue processing packet
 					ret, vector, match = self.HandlePacket(data, getvector = getvector)
@@ -560,8 +551,7 @@ class Client():
 						# had this happen, not sure
 						if vector in self.outgoing:
 							del self.outgoing[vector]
-					
-					
+							#print('removing vector:%s' % vector)
 					
 					if match is True:
 						# blocking call
@@ -569,10 +559,10 @@ class Client():
 					else:
 						# non-blocking call (stores result)
 						if vector is not None:
+							# if a vector entry has been made then it signifies
+							# that we wish to keep the result/reply, otherwise we
+							# just throw the result/reply away
 							if vector in self.vexecuted:
-								# it was specified to discard results
-								del self.vexecuted[vector]
-							else:
 								# do not discard results, but store them
 								print('added to vexecuted for vector:%s' % vector)
 								#print(ret)
@@ -595,7 +585,6 @@ class Client():
 	def HandlePacket(self, data, getvector = None):
 		type = data[0]
 		data = data[1:]
-		print('-->type:%s' % type)
 		if 		type == PktCodeServer.PublicKey:
 			print('got public key')
 			# we got public key, now setup the encryption
@@ -704,7 +693,7 @@ class Client():
 		sock = self.sock
 		_data = struct.pack('>BI', PktCodeClient.BlockConnect, self.nid) + bid
 		data, vector = BuildEncryptedMessage(self.link, _data)
-		sock.send(data)
+		self.outgoing[vector] = (vector, 0, data, self.crypter, _data)
 		
 class SimpleFS(Client):
 	ChunkFree 		= 1
@@ -790,24 +779,21 @@ class SimpleFS(Client):
 			# decrease chunk size
 			fsz = fsz >> 1
 			clevel = clevel - 1
+		return
 
-		'''
-			the following commented out block is test code to ensure
-			the page management structure is working and working 
-			correctly by also checking for overlap
-		'''
+	def TestSegmentAllocationAndFree(self):
 		tpb = 0
 		tpbc = 0
+		lsz = 0
 		
-		self.SetVectorExecutedWarningLimit(2048)
-		
+		self.SetVectorExecutedWarningLimit(2048)		
 		segments = []
 		while True:
 			# let the network do anything it needs to do
-			while self.GetOutstandingCount() >= 100:
-				self.HandlePackets()
+			if self.GetOutstandingCount() >= 100:
+				while self.GetOutstandingCount() >= 100:
+					self.HandlePackets()
 		
-			print('ALLOCATING SEGMENT')
 			sz = random.randint(1, 1024 * 1024 * 100)
 			
 			st = time.time()
@@ -817,7 +803,7 @@ class SimpleFS(Client):
 			tpb = tpb + (tt / (sz / 1024 / 1024 / 1024))
 			tpbc = tpbc + 1
 			
-			print('average time per GB is %s' % (tpb / tpbc))
+			print('average time per GB is %s and largest alloc is:%s' % (tpb / tpbc, lsz))
 			
 			#print(chunks)
 			
@@ -825,7 +811,6 @@ class SimpleFS(Client):
 				# free something
 				print('freeing segment')
 				if len(segments) < 1:
-					print('weird.. we have no segments but we cant allocate sz:%s' % sz)
 					continue
 				#exit()
 				i = random.randint(0, len(segments) - 1)
@@ -836,6 +821,8 @@ class SimpleFS(Client):
 				# try to allocate again, and if fails
 				# then we will free another
 				continue
+			if sz > lsz:
+				lsz = sz
 			
 			# make sure no overlap
 			for chunk in chunks:
@@ -852,11 +839,10 @@ class SimpleFS(Client):
 							print('start:%x end:%x length:%x level:%s' % (_s, _e, _chunk[1], _chunk[2]))
 							exit()	
 			segments.append(chunks)
-			
-		print('format done')
 		
 		while True:
 			self.HandlePackets()
+		return
 		
 	
 	def AllocChunksForSegment(self, seglength):
@@ -1009,19 +995,11 @@ class SimpleFS(Client):
 def doClient():
 	# 192.168.1.120
 	fs = SimpleFS('kmcg3413.net', 1874, bytes(sys.argv[1], 'utf8'))
-	print('format')
 	fs.Format(force = True)
+	
+	fs.TestSegmentAllocationAndFree()
 
-	# create client object
-	#client = Client('localhost', 1874, b'ekwL#i293828eeMDj43EKowi49382dko39#KMekoe993824')
-	# try to write then read from a block
-	#data = b'hello world'
-	#print('write-result:%s' % (client.Write(0, data)))
-	#_data = client.Read(0, 11)
-	#print(data, _data)
-	#client.Lock(0, 100)
-	#client.Unlock(0)
-	#client.Unlock(0))
+
 if __name__ == '__main__':
 	doClient()
 	#for x in range(0, 1):
