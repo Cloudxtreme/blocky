@@ -447,7 +447,7 @@ def server(lip, lport):
 					
 					block['ref'] = block['ref'] + 1
 					
-					if block['fd'] is None:
+					if block['mm'] is None:
 						# either create the file and allocate it's full size
 						# or open an existing and change it's size either to
 						# be smaller or larger (whatever is specified in block)

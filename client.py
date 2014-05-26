@@ -695,7 +695,7 @@ class Client():
 		data, vector = BuildEncryptedMessage(self.link, _data)
 		self.outgoing[vector] = (vector, 0, data, self.crypter, _data)
 		
-class SimpleFS(Client):
+class ChunkSystem(Client):
 	ChunkFree 		= 1
 	ChunkBegin		= 2
 	ChunkData		= 3
@@ -983,12 +983,118 @@ class SimpleFS(Client):
 		self.Write(boff, struct.pack('>QH', next, top - 1))
 		#print('returning chunk:%x level:%s top:%s' % (chunk, level, top - 1))
 		return chunk
+
+class SimpleFS(ChunkSystem):
+	def __init__(self, rip, rport, bid):
+		ChunkSystem.__init__(self, rip, rport, bid)
+	def Format(self, force = False):
+		# format it
+		ChunkSystem.Format(self, force)
+		# the base for any master meta-data
+		self.metabase = 500
+		self.Write(self.metabase, struct.pack('>Q', 0))
 		
-	
 	def EnumerateFileList(self):
-		pass
+		files = []
+		cur = struct.unpack('>Q', self.Read(self.metabase, 8))[0]
+		while cur != 0:
+			# read file header
+			print('reading header:%x' % cur)
+			next, nchunk, tsize, dlen, nlen = struct.unpack('>QQQQH', self.Read(cur, 8 * 4 + 2))
+			# next file, next chunk, tchunksize, datalen, namelen
+			# read file name
+			
+			print('next:%x chunk:%s tsize:%s dlen:%s nlen:%s' % (next, nchunk, tsize, dlen, nlen))
+			off = cur + 8 * 4 + 2
+			name = []
+			while nlen > 0:
+				# nlen = name length
+				if nlen > tsize:
+					clen = tsize
+				else:
+					clen = nlen
+				nlen = nlen - clen
+				print('reading name part off:%x clen:%x' % (off, clen))
+				name.append(self.Read(off, clen))
+				boff = nchunk
+				if boff == 0 or nlen < 1:
+					break
+				nchunk, tsize = struct.unpack('>QQ', self.Read(boff, 8 + 8))
+				off = boff + 16
+			name = (b''.join(name)).decode('utf8', 'ignore')
+			files.append((name, cur))
+			# get next file
+			cur = next
+		return files
+		
 	def WriteFileFromMemory(self, rpath, data):
-		pass
+		chunks = self.AllocChunksForSegment(len(data) + len(rpath))
+		
+		# [(offset, size, level), ...]
+		fchunk = chunks.pop()
+		rchunk = fchunk
+
+		f = struct.unpack('>Q', self.Read(self.metabase, 8))[0]
+		
+		nlen = len(rpath)
+		
+		# next file, next chunk, tchunksize, namelen
+		
+		firstheader = True
+		
+		doff = 0
+		
+		wdata = rpath + data
+		
+		while fchunk[1] != 0:
+			if len(chunks) > 0:
+				nchunk = chunks.pop()
+			else:
+				nchunk = (0, 0, 0)
+			# write header
+			print('writing header for chunk:%x nchunk:%x' % (fchunk[0], nchunk[0]))
+			if firstheader:
+				firstheader = False
+				# next file chunk, next chunk in this size, this chunk size, data size, name size
+				self.Write(fchunk[0], struct.pack('>QQQQH', f, nchunk[0], fchunk[1], len(data), len(rpath)))
+				hdrlen = 8 * 4 + 2
+				nextoff = 8
+			else:
+				# next chunk in this file, this chunk size
+				self.Write(fchunk[0], struct.pack('>QQ', nchunk[0], fchunk[1]))
+				hdrlen = 8 * 2
+				nextoff = 0
+				
+			if doff < len(wdata):
+				# write some file data
+				crem = fchunk[1] - hdrlen
+				if crem > len(wdata):
+					crem = len(wdata) - doff
+				print('writing %s bytes of data out of %s' % (crem, len(wdata)))
+				self.Write(fchunk[0] + hdrlen, wdata[doff:doff + crem])
+				doff = doff + crem
+			# lchunk is used at end if more data remaining
+			lchunk = fchunk	
+			# fchunk is used on next iteration if not (0, 0, 0)
+			fchunk = nchunk
+		# is there still name data or file data left
+		if doff < len(data):
+			# allocate one more page
+			need = (len(data) - doff) + 8 * 2
+			assert(need < 4096)
+			chunk = self.PullChunk(0)
+			print('allocated final chunk:%x of size:%x' % (chunk, 4096))
+			# link from last chunk to this chunk
+			self.Write(fchunk[0] + nextoff, struct.pack('>Q', chunk[0]))
+			# write our header
+			self.Write(chunk[0], struct.pack('>QQ', 0, chunk[1]))
+			off = 8 * 2
+			# write remaining data
+			self.Write(chunk[0] + off, data[doff:])
+		
+		# i write the 
+		self.Write(self.metabase, struct.pack('>Q', rchunk[0]))
+		
 	def ReadFileIntoMemory(self, rpath):
 		pass
 		
@@ -996,8 +1102,13 @@ def doClient():
 	# 192.168.1.120
 	fs = SimpleFS('kmcg3413.net', 1874, bytes(sys.argv[1], 'utf8'))
 	fs.Format(force = True)
+	fs.WriteFileFromMemory(b'/home/kmcguire/test', b'hello world')
+	list = fs.EnumerateFileList()
+	print(list)
 	
-	fs.TestSegmentAllocationAndFree()
+	
+	
+	#fs.TestSegmentAllocationAndFree()
 
 
 if __name__ == '__main__':
