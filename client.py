@@ -1026,8 +1026,19 @@ class SimpleFS(ChunkSystem):
 			# get next file
 			cur = next
 		return files
-		
-	def WriteFileFromMemory(self, rpath, data):
+	def GetUniqueID(self):
+		raise Exception('Not Implement')
+	def GetFileListUniqueID(self):
+		raise Exception('Not Implement')
+	def GetChangeID(self):
+		raise Exception('Not Implement')
+	def DeleteFile(self, foff):
+		raise Exception('Not Implement')
+	def WriteFileFromMemory(self, foff, data, off = 0):
+		raise Exception('Not Implement')
+	def TruncateFile(self, foff, newsize):
+		raise Exception('Not Implement')
+	def WriteNewFileFromMemory(self, rpath, data):
 		chunks = self.AllocChunksForSegment(len(data) + len(rpath))
 		
 		# [(offset, size, level), ...]
@@ -1095,14 +1106,17 @@ class SimpleFS(ChunkSystem):
 		# i write the 
 		self.Write(self.metabase, struct.pack('>Q', rchunk[0]))
 		
-	def ReadFileIntoMemory(self, rpath):
-		pass
+	def ReadFileIntoMemory(self, rpath, offset = 0, length = None):
+		raise Exception('Not Implement')
 		
 def doClient():
 	# 192.168.1.120
 	fs = SimpleFS('kmcg3413.net', 1874, bytes(sys.argv[1], 'utf8'))
 	fs.Format(force = True)
-	fs.WriteFileFromMemory(b'/home/kmcguire/test', b'hello world')
+	fs.WriteFileFromMemory(b'/home/kmcguire/a', b'hella world')
+	fs.WriteFileFromMemory(b'/home/kmcguire/b', b'hellb world')
+	fs.WriteFileFromMemory(b'/home/kmcguire/c', b'hellc world')
+	fs.WriteFileFromMemory(b'/home/kmcguire/d', b'helld world')
 	list = fs.EnumerateFileList()
 	print(list)
 	
