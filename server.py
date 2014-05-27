@@ -91,7 +91,7 @@ def server(lip, lport):
 	
 	if os.path.exists('id_rsa') and os.path.exists('id_rsa.pub'):
 		# use external key (from ssh-keygen)
-		
+		print('loading id_rsa and id_rsa.pub')
 		# this contains the exponent and public key
 		pub = pubcrypt.readSSHPublicKey('id_rsa.pub')
 		# this contains the public key and private key
@@ -113,7 +113,7 @@ def server(lip, lport):
 			hopefully one day I will go back in and fix this by making all
 			my functions work with big endian...
 			
-			Anyway.. for gods sake it finally works.
+			Anyway.. for gods sake it finally works!!! 
 		'''
 		keypub = (pubcrypt.fromi256(pubcrypt.toi256r(pub[0])), pubcrypt.fromi256(pubcrypt.toi256r(pub[1])))
 		keypri = (pubcrypt.fromi256(pubcrypt.toi256r(pri[0])), pubcrypt.fromi256(pubcrypt.toi256r(pri[1])))
@@ -146,26 +146,26 @@ def server(lip, lport):
 		fd.close()
 		# put it in a form used by SSH stuff
 		keypub = (pubcrypt.fromi256(65537), keypub)
-		keypri = (keypub[1], keypri)
-		
+		keypri = (keypri, keypub[1])
 		
 	#keypub = (keypub[1], keypub[0])
 	#keypri = (keypri[1], keypri[0])
 		
-	c = pubcrypt.crypt(b'hello world', keypub)
-	p = pubcrypt.decrypt(c, keypri)
-	print('p', p[0:5])
+	#c = pubcrypt.crypt(b'hello world', keypub)
+	#p = pubcrypt.decrypt(c, keypri)
+	#print('p', p[0:5])
 	
-	print(len(keypub[0]), len(keypub[1]))
-	print(len(keypri[0]), len(keypri[1]))
+	#print(len(keypub[0]), len(keypub[1]))
+	#print(len(keypri[0]), len(keypri[1]))
 	
-	if keypri[1] == keypub[1]:
-		print('MATCH')
+	#if keypri[1] == keypub[1]:
+	#	print('MATCH')
 	
-	exit()
-		
+	print('opening server socket..')
 	sock =  socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 	sock.bind((lip, lport))
+	
+	print('server is running..')
 	
 	wta = 0
 	wtc = 0

@@ -113,10 +113,19 @@ def readKeyFile(path):
 	
 	out = ''.join(out)
 	
-	return base64.b64decode(out)
+	return base64.b64decode(bytes(out, 'utf8'))
 
 def readSSHPublicKey(path):
-	data = readKeyFile(path)
+	# do not ask me.. had lots of trouble digging through openssh
+	# source.. building it.. producing different results... LOL..
+	# i just gave up and hacked this together
+	fd = open(path, 'rb')
+	data = fd.read()
+	fd.close()
+	data = data.split(b' ')
+	data = data[1]
+	
+	data = base64.b64decode(data)
 	
 	sz = struct.unpack_from('>I', data)[0]
 	data = data[4:]
@@ -130,15 +139,13 @@ def readSSHPublicKey(path):
 	
 	sz = struct.unpack_from('>I', data)[0]
 	data = data[4:]
-	print('sz', sz, len(data))
 	mod = data[0:sz]
 	
 	return (exp, mod)
 	
-
 def readSSHPrivateKey(path):
 	data = readKeyFile(path)
-
+	
 	fields = []
 	
 	data = data[4:]
@@ -150,6 +157,7 @@ def readSSHPrivateKey(path):
 		
 		sz = data[0]
 		data = data[1:]
+		
 		if sz == 0x82:
 			sz = data[0] << 8 | data[1]
 			data = data[2:]
@@ -163,7 +171,7 @@ def readSSHPrivateKey(path):
 		fields.append(field) 
 		fields[ndx] = field
 		ndx = ndx + 1
-
+		
 	return (fields[3][1], fields[1][1])
 	
 '''
