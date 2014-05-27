@@ -305,7 +305,7 @@ def server(lip, lport):
 				print('send public key; expsz:%s keysz:%s' % (len(keypub[0]), len(keypub[1])))
 				sock.sendto(data, addr)
 				continue
-				
+			
 			# they wish to setup the encryption between us
 			if type == PktCodeClient.SetupEncryption:
 				# the data has been encrypted using the public key

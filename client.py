@@ -628,11 +628,9 @@ class Client():
 			if nid == self.nid:
 				data = data[4:]								# drop NID off
 				esz = struct.unpack_from('>I', data)[0]		# get exponent size in bytes
-				print('esz', esz)							#
 				data =  data[4:]							# drop exponent size off
 				exp = data[0:esz]							# get exponent
 				key = data[esz:]							# get key
-				print('key', len(key))
 				
 				self.pubkey = (exp, key)
 				
@@ -728,7 +726,7 @@ class Client():
 		self.sock.send(data)
 
 	def SetupEncryption(self):
-		key = IDGen.gen(7)
+		key = IDGen.gen(512)
 		self.link['crypter'] = SymCrypt(key)
 		crypter = self.link['crypter']
 		self.crypter = crypter
@@ -1157,7 +1155,7 @@ class SimpleFS(ChunkSystem):
 	def ReadFileIntoMemory(self, rpath, offset = 0, length = None):
 		raise Exception('Not Implement')
 		
-def doClient():
+def doClient(rhost, bid):
 	# 192.168.1.120
 	fs = SimpleFS('192.168.1.120', 1874, bytes(sys.argv[1], 'utf8'))
 	
@@ -1176,9 +1174,22 @@ def doClient():
 	
 	fs.TestSegmentAllocationAndFree()
 
-
+# if main module then execute main routine
 if __name__ == '__main__':
-	doClient()
+	print('Blocky Standard Client')
+	print('Leonard Kevin McGuire Jr. 2014')
+	print()
+	print('WARNING: THIS SOFTWARE IS ALPHA!')
+	print()
+	
+	if len(sys.argv) < 3:
+		print('Not Enough Arguments')
+		print('<remote-host> <remote-block-id>')
+		exit()
+		
+	doClient(sys.argv[1], sys.argv[2])
+	
+	# multiple client test
 	#for x in range(0, 1):
 	#	t = threading.Thread(target = doClient)
 	#	t.start()
