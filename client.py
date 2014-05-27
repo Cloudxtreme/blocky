@@ -626,7 +626,16 @@ class Client():
 			# we got public key, now setup the encryption
 			nid = struct.unpack_from('>I', data)[0]
 			if nid == self.nid:
-				self.pubkey = pubcrypt.toi256(data[4:])
+				data = data[4:]								# drop NID off
+				esz = struct.unpack_from('>I', data)[0]		# get exponent size in bytes
+				print('esz', esz)							#
+				data =  data[4:]							# drop exponent size off
+				exp = data[0:esz]							# get exponent
+				key = data[esz:]							# get key
+				print('key', len(key))
+				
+				self.pubkey = (exp, key)
+				
 				print('setup encryption')
 				self.SetupEncryption()
 		elif 	type == PktCodeServer.EstablishLink:
@@ -1150,7 +1159,7 @@ class SimpleFS(ChunkSystem):
 		
 def doClient():
 	# 192.168.1.120
-	fs = SimpleFS('kmcg3413.net', 1874, bytes(sys.argv[1], 'utf8'))
+	fs = SimpleFS('192.168.1.120', 1874, bytes(sys.argv[1], 'utf8'))
 	
 	fs.SetCommunicationExceptionTime(45)
 	fs.SetRelinkTimeout(15)

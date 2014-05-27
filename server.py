@@ -89,7 +89,54 @@ def server(lip, lport):
 	'''
 	signal.signal(signal.SIGINT, HandleSIGINT)
 	
-	if os.path.exists('pubkey') and os.path.exists('prikey'):
+	if os.path.exists('id_rsa') and os.path.exists('id_rsa.pub'):
+		# use external key (from ssh-keygen)
+		
+		# this contains the exponent and public key
+		pub = pubcrypt.readSSHPublicKey('id_rsa.pub')
+		# this contains the public key and private key
+		pri = pubcrypt.readSSHPrivateKey('id_rsa')
+		
+		# pub[0] == exponent
+		# pub[1] == public key
+		# pri[0] == public key
+		# pri[1] == private key
+		
+		'''
+			Well, this is a big oops. You see I started converting between
+			Python large integers and byte form with a little endian format, 
+			but SSH keys are stored using a big endian. So here I am just
+			converting from big-endian to little-endian.
+			
+			Now, you may ask WHY?? Well, I *finally* got the code working and
+			I am tired of messing with it. So I am leaving it like this and
+			hopefully one day I will go back in and fix this by making all
+			my functions work with big endian...
+			
+			Anyway.. for gods sake it finally works.
+		'''
+		keypub = (pubcrypt.fromi256(pubcrypt.toi256r(pub[0])), pubcrypt.fromi256(pubcrypt.toi256r(pub[1])))
+		keypri = (pubcrypt.fromi256(pubcrypt.toi256r(pri[0])), pubcrypt.fromi256(pubcrypt.toi256r(pri[1])))
+		
+		#keypub = (pub[0], pub[1])
+		#keypri = (pri[0], pri[1])
+	else:
+		'''
+			This was mainly done just to get everything started. For real security
+			you would likely wanted to use the ssh-keypath path (code block above).
+			As the ssh-keygen tool can produce much more secure keys. This is just
+			here for testing in the event you do not want to generate any keys.
+		'''
+		if os.path.exists('pubkey') is False or os.path.exists('prikey') is False:
+			print('[server] generating public and private key pair')
+			keypub, keypri = pubcrypt.keygen(2 ** sconfig['public-key-bits'])
+			fd = open('pubkey', 'wb')
+			fd.write(pubcrypt.fromi256(keypub))
+			fd.close()
+			fd = open('prikey', 'wb')
+			fd.write(pubcrypt.fromi256(keypri))
+			fd.close()
+			print('[server] done generating key pair')
 		print('[server] loading public and private key pair')
 		fd = open('pubkey', 'rb')
 		keypub = fd.read()
@@ -97,22 +144,28 @@ def server(lip, lport):
 		fd = open('prikey', 'rb')
 		keypri = fd.read()
 		fd.close()
-		keypub = pubcrypt.toi256(keypub)
-		keypri = pubcrypt.toi256(keypri)
-	else:
-		print('[server] generating public and private key pair')
-		keypub, keypri = pubcrypt.keygen(2 ** sconfig['public-key-bits'])
-		fd = open('pubkey', 'wb')
-		fd.write(pubcrypt.fromi256(keypub))
-		fd.close()
-		fd = open('prikey', 'wb')
-		fd.write(pubcrypt.fromi256(keypri))
-		fd.close()	
-		print('[server] done generating key pair')
+		# put it in a form used by SSH stuff
+		keypub = (pubcrypt.fromi256(65537), keypub)
+		keypri = (keypub[1], keypri)
+		
+		
+	#keypub = (keypub[1], keypub[0])
+	#keypri = (keypri[1], keypri[0])
+		
+	c = pubcrypt.crypt(b'hello world', keypub)
+	p = pubcrypt.decrypt(c, keypri)
+	print('p', p[0:5])
+	
+	print(len(keypub[0]), len(keypub[1]))
+	print(len(keypri[0]), len(keypri[1]))
+	
+	if keypri[1] == keypub[1]:
+		print('MATCH')
+	
+	exit()
 		
 	sock =  socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 	sock.bind((lip, lport))
-	
 	
 	wta = 0
 	wtc = 0
@@ -247,8 +300,9 @@ def server(lip, lport):
 			if type == PktCodeClient.GetPublicKey:
 				# convert key from integer into string of data
 				nid = struct.unpack_from('>I', data[1:5])[0]
-				data = pubcrypt.fromi256(keypub)
-				data = struct.pack('>BI', PktCodeServer.PublicKey, nid) + data
+				print('sizes', len(keypub[0]), len(keypub[1]))
+				data = struct.pack('>BII', PktCodeServer.PublicKey, nid, len(keypub[0])) + keypub[0] + keypub[1]
+				print('send public key; expsz:%s keysz:%s' % (len(keypub[0]), len(keypub[1])))
 				sock.sendto(data, addr)
 				continue
 				
@@ -259,7 +313,7 @@ def server(lip, lport):
 				nid = struct.unpack('>I', data[0:4])[0]
 				data = data[4:]
 				# decrypt it and reveal the encryption key
-				data = pubcrypt.decrypt(data, keypri, keypub)
+				data = pubcrypt.decrypt(data, keypri)
 				# create a unique link
 				if addr not in links:
 					links[addr] = {}
