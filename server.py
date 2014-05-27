@@ -299,12 +299,16 @@ def server(lip, lport):
 					# let them know
 					data = struct.pack('>B', PktCodeServer.NoLink)
 					sock.sendto(data, addr)
-					raise AddrNotInLinkException()
+					print('\'', end='')
+					#raise AddrNotInLinkException()
+					continue
 				if uid not in links[addr]:
 					# let them know
 					data = struct.pack('>B', PktCodeServer.NoLink)
 					sock.sendto(data, addr)
-					raise InvalidLinkIDException()
+					#raise InvalidLinkIDException()
+					print('~', end='')
+					continue
 				link = links[addr][uid]
 	
 				link['lmt'] = time.time()
@@ -376,11 +380,6 @@ def server(lip, lport):
 					# limit
 					print('.', end='')
 					continue
-				
-				#if vector == 117:
-					#print('GOT VECTOR 117')
-					#while True:
-					#	pass
 				
 				# they wish to connect to a block
 				if type == PktCodeClient.BlockConnect:
@@ -534,7 +533,7 @@ def server(lip, lport):
 					# clear write holds
 					link['wholds'] = []
 					
-					data = struct.pack('>BQQH', PktCodeServer.WriteSuccess, vector, offset, len(data))
+					data = struct.pack('>BQQH', PktCodeServer.WriteSuccess, vector, 0, 0)
 					data, _tmp = BuildEncryptedMessage(link, data)
 					link['outgoing'][_tmp] = (_tmp, 0, data)
 					continue
@@ -670,8 +669,8 @@ def server(lip, lport):
 					data, _tmp = BuildEncryptedMessage(link, data)[0]
 					link['outgoing'][_tmp] = (_tmp, 0, data)
 					continue
-			print('unknown message type:%s' % type)
-			raise UnknownMessageTypeException()
+			print('[', end='')
+			continue
 			# end-of-encrypted-message-block
 		except Exception:
 			traceback.print_exc(file = sys.stdout)

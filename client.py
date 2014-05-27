@@ -25,6 +25,9 @@ class WriteHoldCountException(Exception):
 	This will create a client object and provide access to the remote block.
 '''
 class Client():
+	class NoLinkException(Exception):
+		pass
+
 	def __init__(self, rip, rport, bid):
 		sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 		
@@ -64,6 +67,10 @@ class Client():
 		self.x = 0				# debugging variable (safe to remove)
 		
 		self.vexecwarnlimit = 1024
+		
+		# set the defaults
+		self.SetCommunicationExceptionTime(60 * 15)
+		self.SetRelinkTimeout(60 * 5)
 		
 	'''
 		If blocking:
@@ -390,15 +397,23 @@ class Client():
 			raise OperationException()
 		return ret
 		
+	def SetCommunicationExceptionTime(self, timeout):
+		self.commexctimeout = timeout
+	def SetRelinkTimeout(self, timeout):
+		self.relinkafter = timeout
+		
 	def DoBlockingLinkSetup(self):
 		ts = time.time()
+		
 		while self.linkvalid is False:
 			# try to setup link
 			print('getting public key')
 			self.GetPublicKey()
 			st = time.time()
 			while self.linkvalid is False:
-				self.HandlePackets()
+				# do not handle relinks and timeout after 5 seconds which
+				# will allow us to rehandle it here
+				self.HandlePackets(handlerelink = False, timeout = 5)
 				# if too much time passes, abort and try again
 				if time.time() - st > 15:
 					break
@@ -407,7 +422,9 @@ class Client():
 				# because the main application might want to do
 				# other things, or even release any file locks
 				# that it holds
-				if time.time() - ts > (60 * 15):
+				
+				# if commexctimeout is enabled and the time specified has elapsed
+				if self.commexctimeout is not None and time.time() - ts > self.commexctimeout:
 					raise CommunicationException()
 	def GetOutstandingCount(self):
 		return len(self.outgoing)
@@ -415,7 +432,7 @@ class Client():
 		self.vexecwarnlimit = limit
 	def GetVectorExecutedWarningLimit(self):
 		return self.vexecwarnlimit
-	def HandlePackets(self, getvector = None):
+	def HandlePackets(self, getvector = None, handlerelink = True, timeout = None):
 		ter = time.time()
 		
 		if len(self.vexecuted) > self.vexecwarnlimit:
@@ -455,16 +472,18 @@ class Client():
 				#	out = outgoing[out[0]]
 				
 				if ct - out[1] > 5:
-					if out[1] > 0:
-						#print('resend vector:%s' % vector)
-						pass
+					if out[1] == 0:
+						# record the last time we send a packet but
+						# do not include any resends (because they
+						# can indicate a need to re-establish the
+						# link)
+						self.lmst = ct
 					# it has been too long so resend it
 					if self.crypter != out[3]:
-						raise Exception('DEBUG')
 						# re-encrypt the data
 						data, vector = BuildEncryptedMessage(self.link, out[4])
 						#outgoing[vector] = (vector, out[1], data, self.crypter, data[4])
-						toadd.append((vector, out[1], data, self.crypter, out[4]))
+						toadd.append((vector, 0, data, self.crypter, out[4]))
 						# schedule the old vector to be removed
 						toremove.append(out[0])
 						# do not send old vector, just skip it
@@ -482,8 +501,6 @@ class Client():
 						continue
 					# update time last sent
 					outgoing[out[0]] = (out[0], ct, out[2], out[3], out[4])
-					# record the last time we sent a message
-					self.lmst = ct
 					continue
 			# remove any old (old encryption) outgoing packets and
 			# this had to be done outside the iteration loop because
@@ -496,14 +513,20 @@ class Client():
 			for ta in toadd:
 				outgoing[ta[0]] = ta
 			
-			# try to re-establish our link, this will not flush
-			# our outgoing list so everything should pick back
-			# up as normal
-			if self.lmt > 0 and self.lmst - self.lmt > (60 * 5):
-				# okay, lets consider our link dead
-				# and try to restablish it
+			
+			# if we have not send a message (first time send)
+			# after so long AND we have not recieved a message
+			# AND we are supposed to handle the relink then attempt
+			# to relink
+			#print('handlerelink:%s lmst-delta:%s lmt-delta:%s' % (handlerelink, ct - self.lmst, ct - self.lmt))
+			if handlerelink and ct - self.lmst > self.relinkafter and ct - self.lmt > self.relinkafter:
+			#if handlerelink and self.lmt > 0 and self.lmst - self.lmt > self.relinkafter:
+				# okay link is considered bad, try to setup a link again
 				self.linkvalid = False
 				self.DoBlockingLinkSetup()
+			
+			if timeout is not None and time.time() - ter > timeout:
+				return
 			
 			# wait just a bit because if zero we just burn CPU
 			# doing a polling loop and that actually decreases
@@ -537,11 +560,24 @@ class Client():
 					# would get lost and fill up the server's vector
 					# ranges making the connection unusable
 					_data, _tmp = BuildEncryptedMessage(self.link, struct.pack('>BQ', PktCodeClient.Ack, svector), vector = 0)
-					self.sock.send(_data)
+					try:
+						self.sock.send(_data)
+					except Exception as e:
+						pass
 									
 				if encrypted is False or self.link['vman'].IsVectorGood(svector) is True:
 					# continue processing packet
-					ret, vector, match = self.HandlePacket(data, getvector = getvector)
+					try:
+						ret, vector, match = self.HandlePacket(data, getvector = getvector)
+					except Client.NoLinkException as e:
+						# decided not to handle nolink packets
+						#if handlerelink:
+						#	self.linkvalid = False
+						#	self.DoBlockingLinkSetup()
+						#	continue
+						# we have been called by DoBlockingLinkSetup for handlerelink to be False
+						return
+					
 					if match is None:
 						# unknown packet
 						continue
@@ -599,6 +635,9 @@ class Client():
 			nid = struct.unpack_from('>I', data)[0]
 			if nid == self.nid:
 				data = data[4:]
+				if 'ulid' in self.link:
+					print('link changed from old:%s to new:%s' % (self.link['ulid'], data))
+				self.link['vman'] = VectorMan()
 				self.link['ulid'] = data
 				self.ConnectBlock(self.bid)
 		elif	type == PktCodeServer.BlockConnectFailure:
@@ -607,8 +646,8 @@ class Client():
 				raise Exception('Failure Connecting To Block')
 		elif	type == PktCodeServer.NoLink:
 			self.linkvalid = False
-			print('no link so doing reconnect')
-			self.DoBlockingLinkSetup()
+			#print('no link so doing reconnect')
+			raise Client.NoLinkException()
 		elif 	type == PktCodeServer.BlockConnectSuccess:
 			print('block connected')
 			self.linkvalid = True
@@ -1112,17 +1151,21 @@ class SimpleFS(ChunkSystem):
 def doClient():
 	# 192.168.1.120
 	fs = SimpleFS('kmcg3413.net', 1874, bytes(sys.argv[1], 'utf8'))
+	
+	fs.SetCommunicationExceptionTime(45)
+	fs.SetRelinkTimeout(15)
+	
 	fs.Format(force = True)
-	fs.WriteFileFromMemory(b'/home/kmcguire/a', b'hella world')
-	fs.WriteFileFromMemory(b'/home/kmcguire/b', b'hellb world')
-	fs.WriteFileFromMemory(b'/home/kmcguire/c', b'hellc world')
-	fs.WriteFileFromMemory(b'/home/kmcguire/d', b'helld world')
+	fs.WriteNewFileFromMemory(b'/home/kmcguire/a', b'hella world')
+	fs.WriteNewFileFromMemory(b'/home/kmcguire/b', b'hellb world')
+	fs.WriteNewFileFromMemory(b'/home/kmcguire/c', b'hellc world')
+	fs.WriteNewFileFromMemory(b'/home/kmcguire/d', b'helld world')
 	list = fs.EnumerateFileList()
 	print(list)
 	
 	
 	
-	#fs.TestSegmentAllocationAndFree()
+	fs.TestSegmentAllocationAndFree()
 
 
 if __name__ == '__main__':

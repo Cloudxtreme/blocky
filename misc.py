@@ -223,6 +223,7 @@ def ProcessRawSocketMessage(link, data):
 	_ulid = data[0:4]
 	if _ulid != ulid:
 		# apparently, not meant for us..
+		print('@', end='')
 		return (None, data, None)
 	data = data[4:]
 	
@@ -239,6 +240,7 @@ def ProcessRawSocketMessage(link, data):
 	_hash = m.digest()
 	if _hash != hash:
 		# failed hash verification (ignore it)
+		print('#', end='')
 		return (False, data, None)
 	# verify vector is valid
 	vector = struct.unpack_from('>Q', data)[0]
