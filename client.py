@@ -724,7 +724,7 @@ class Client():
 	def GetPublicKey(self):
 		data = struct.pack('>BI', PktCodeClient.GetPublicKey, self.nid)
 		self.sock.send(data)
-
+		
 	def SetupEncryption(self):
 		key = IDGen.gen(512)
 		self.link['crypter'] = SymCrypt(key)
@@ -740,23 +740,39 @@ class Client():
 		_data = struct.pack('>BI', PktCodeClient.BlockConnect, self.nid) + bid
 		data, vector = BuildEncryptedMessage(self.link, _data)
 		self.outgoing[vector] = (vector, 0, data, self.crypter, _data)
-		
-class ChunkSystem(Client):
+
+class ChunkSystem():
+	pass
+	
+class ChunkPushPullSystem(ChunkSystem):
 	ChunkFree 		= 1
 	ChunkBegin		= 2
 	ChunkData		= 3
-
-	def __init__(self, sip, sport, bid):
-		Client.__init__(self, sip, sport, bid)
-	def Format(self, force = False, csize = 4096):
-		sig = self.Read(0, 8)
-		# check if already contains a file system
-		if sig != bytes((0, 0, 0, 0, 0, 0, 0, 0)) and force is False:
-			return False
+	
+	def GetBasePageSize(self):
+		return self.base
+	
+	def GetLevelCount(self):
+		return self.levels
+	
+	def __init__(self, client):
+		self.client = client
+	
+		sig = client.Read(0, 8)
+		
+		levels, doffset, base = struct.unpack('>IQQ', client.Read(100, 4 + 8 * 2))
+		self.levels = levels
+		self.base = base
+		self.doffset = doffset
+		
+	def Format(self, csize = 4096):
+		client = self.client
+	
+		sig = client.Read(0, 8)
 		# lets clear the signature field
-		self.Write(0, bytes((0, 0, 0, 0, 0, 0, 0, 0)))
+		client.Write(0, bytes((0, 0, 0, 0, 0, 0, 0, 0)))
 		# get block size
-		bsz = self.GetBlockSize()
+		bsz = client.GetBlockSize()
 		
 		# B=status Q=size
 		# 000 - whole
@@ -779,13 +795,13 @@ class ChunkSystem(Client):
 		self.doffset = doffset
 		
 		# save this in the header
-		self.Write(100, struct.pack('>IQQ', levels, doffset, self.base))
+		client.Write(100, struct.pack('>IQQ', levels, doffset, self.base))
 		
 		# max 510 entries per bucket
 		for levelndx in range(0, levels):
 			# [next][top]
-			self.Write(levelndx * 4096 + 4096, struct.pack('>QH', 0, 0))
-			self.Write(200 + levelndx * 8, struct.pack('>Q', levelndx * 4096 + 4096))
+			client.Write(levelndx * 4096 + 4096, struct.pack('>QH', 0, 0))
+			client.Write(200 + levelndx * 8, struct.pack('>Q', levelndx * 4096 + 4096))
 		
 		# work down creating the largest possible chunks
 		# while placing the chunks into their respective
@@ -815,16 +831,19 @@ class ChunkSystem(Client):
 			# exceed 510 entries thus overfilling our boot strapping buckets
 			assert(wgb <= 510)
 			
-			self.Write(boff, struct.pack('>QH', 0, wgb))
+			client.Write(boff, struct.pack('>QH', 0, wgb))
 			
 			for i in range(0, wgb):
-				self.Write(boff + (8 + 2) + i * 8, struct.pack('>Q',  cmoff))
+				client.Write(boff + (8 + 2) + i * 8, struct.pack('>Q',  cmoff))
 				print('cmoff:%x' % cmoff)
 				# track our current data position in the block
 				cmoff = cmoff + fsz
 			# decrease chunk size
 			fsz = fsz >> 1
 			clevel = clevel - 1
+	
+		print('done cs format')
+		client.Write(0, b'cmancman')
 		return
 
 	def TestSegmentAllocationAndFree(self):
@@ -832,13 +851,13 @@ class ChunkSystem(Client):
 		tpbc = 0
 		lsz = 0
 		
-		self.SetVectorExecutedWarningLimit(2048)		
+		client.SetVectorExecutedWarningLimit(2048)		
 		segments = []
 		while True:
 			# let the network do anything it needs to do
-			if self.GetOutstandingCount() >= 100:
-				while self.GetOutstandingCount() >= 100:
-					self.HandlePackets()
+			if client.GetOutstandingCount() >= 100:
+				while client.GetOutstandingCount() >= 100:
+					client.HandlePackets()
 		
 			sz = random.randint(1, 1024 * 1024 * 100)
 			
@@ -887,7 +906,7 @@ class ChunkSystem(Client):
 			segments.append(chunks)
 		
 		while True:
-			self.HandlePackets()
+			client.HandlePackets()
 		return
 		
 	
@@ -941,43 +960,46 @@ class ChunkSystem(Client):
 		return True
 	
 	def PushBasePage(self, page):
+		client = self.client
+		
 		level = 0
-		boff = struct.unpack('>Q', self.Read(200 + level * 8, 8))[0]
-		next, top = struct.unpack('>QH', self.Read(boff, 10))
+		boff = struct.unpack('>Q', client.Read(200 + level * 8, 8))[0]
+		next, top = struct.unpack('>QH', client.Read(boff, 10))
 		if top == self.bucketmaxslots:
 			# create new bucket from one of the pages
-			self.WriteHold(page, struct.pack('>QH', boff, 0))
-			self.WriteHold(200 + level * 8, struct.pack('>Q', page))
-			self.DoWriteHold()
+			client.WriteHold(page, struct.pack('>QH', boff, 0))
+			client.WriteHold(200 + level * 8, struct.pack('>Q', page))
+			client.DoWriteHold()
 			return True
 		# push a page into the bucket
-		self.WriteHold(boff + 10 + top * 8, struct.pack('>Q', page))
-		self.WriteHold(boff, struct.pack('>QH', next, top + 1))
-		self.DoWriteHold()
+		client.WriteHold(boff + 10 + top * 8, struct.pack('>Q', page))
+		client.WriteHold(boff, struct.pack('>QH', next, top + 1))
+		client.DoWriteHold()
 		return True
 		
 	def PushChunk(self, level, chunk):
+		client = self.client
 		# short-circuit to the specialized function for pages (not chunks)
 		#print('push-chunk level:%s chunk:%x' % (level, chunk))
 		if level == 0:
 			return self.PushBasePage(chunk)
-		boff = struct.unpack('>Q', self.Read(200 + level * 8, 8))[0]
-		next, top = struct.unpack('>QH', self.Read(boff, 10))
+		boff = struct.unpack('>Q', client.Read(200 + level * 8, 8))[0]
+		next, top = struct.unpack('>QH', client.Read(boff, 10))
 		if top == self.bucketmaxslots:
 			# create new bucket from ... a page (base page / base chunk)
 			page = self.PullChunk(0)
 			if page is None:
 				return False
-			self.WriteHold(page, struct.pack('>QH', boff, 0))
-			self.WriteHold(200 + level * 8, struct.pack('>Q', page))
+			client.WriteHold(page, struct.pack('>QH', boff, 0))
+			client.WriteHold(200 + level * 8, struct.pack('>Q', page))
 			next = boff
 			boff = page
 			top = 0
 			
 		# push chunk into bucket
-		self.WriteHold(boff + 10 + top * 8, struct.pack('>Q', chunk))
-		self.WriteHold(boff, struct.pack('>QH', next, top + 1))
-		self.DoWriteHold()
+		client.WriteHold(boff + 10 + top * 8, struct.pack('>Q', chunk))
+		client.WriteHold(boff, struct.pack('>QH', next, top + 1))
+		client.DoWriteHold()
 
 		
 	def FillLevelOnce(self, level):
@@ -1002,10 +1024,11 @@ class ChunkSystem(Client):
 		return ret
 		
 	def __PullChunk(self, level, slackpages):
+		client = self.client
 		#print('pulling chunk from level:%s' % level)
 		#print('pulling chunk from level:%s' % level)
-		boff = struct.unpack('>Q', self.Read(200 + level * 8, 8))[0]
-		next, top = struct.unpack('>QH', self.Read(boff, 10))
+		boff = struct.unpack('>Q', client.Read(200 + level * 8, 8))[0]
+		next, top = struct.unpack('>QH', client.Read(boff, 10))
 		if top == 0:
 			#print('		bucket for level empty')
 			# drop this page and get next
@@ -1019,34 +1042,45 @@ class ChunkSystem(Client):
 					#print('			filling level was fale')
 					return None
 				return self.__PullChunk(level, slackpages)
-			self.Write(200 + ulevel * 8, struct.pack('>Q', next))
+			client.Write(200 + ulevel * 8, struct.pack('>Q', next))
 			# store this unused base sized page
 			slackpages.append(boff)
 			# try again..
 			return self.__PullChunk(level, slackpages)
-		chunk = struct.unpack('>Q', self.Read(boff + 10 + (top - 1) * 8, 8))[0]
+		chunk = struct.unpack('>Q', client.Read(boff + 10 + (top - 1) * 8, 8))[0]
 		#print('		chunk:%s' % chunk)
-		self.Write(boff, struct.pack('>QH', next, top - 1))
+		client.Write(boff, struct.pack('>QH', next, top - 1))
 		#print('returning chunk:%x level:%s top:%s' % (chunk, level, top - 1))
 		return chunk
-
-class SimpleFS(ChunkSystem):
-	def __init__(self, rip, rport, bid):
-		ChunkSystem.__init__(self, rip, rport, bid)
-	def Format(self, force = False):
-		# format it
-		ChunkSystem.Format(self, force)
+		
+	def GetClient(self):
+		return self.client
+		
+class BasicFS():
+	pass
+		
+class SimpleFS(BasicFS):
+	def __init__(self, cs):
+		self.cs = cs
+		self.client = cs.GetClient()
+		
+	def Format(self):
+		client = self.client
+		cs = self.cs
 		# the base for any master meta-data
 		self.metabase = 500
-		self.Write(self.metabase, struct.pack('>Q', 0))
+		# write our signature field
+		client.Write(16, b'sifssifs')
+		client.Write(self.metabase, struct.pack('>Q', 0))
 		
 	def EnumerateFileList(self):
+		client = self.client
 		files = []
-		cur = struct.unpack('>Q', self.Read(self.metabase, 8))[0]
+		cur = struct.unpack('>Q', client.Read(self.metabase, 8))[0]
 		while cur != 0:
 			# read file header
 			print('reading header:%x' % cur)
-			next, nchunk, tsize, dlen, nlen = struct.unpack('>QQQQH', self.Read(cur, 8 * 4 + 2))
+			next, nchunk, tsize, dlen, nlen = struct.unpack('>QQQQH', client.Read(cur, 8 * 4 + 2))
 			# next file, next chunk, tchunksize, datalen, namelen
 			# read file name
 			
@@ -1061,11 +1095,11 @@ class SimpleFS(ChunkSystem):
 					clen = nlen
 				nlen = nlen - clen
 				print('reading name part off:%x clen:%x' % (off, clen))
-				name.append(self.Read(off, clen))
+				name.append(client.Read(off, clen))
 				boff = nchunk
 				if boff == 0 or nlen < 1:
 					break
-				nchunk, tsize = struct.unpack('>QQ', self.Read(boff, 8 + 8))
+				nchunk, tsize = struct.unpack('>QQ', client.Read(boff, 8 + 8))
 				off = boff + 16
 			name = (b''.join(name)).decode('utf8', 'ignore')
 			files.append((name, cur))
@@ -1082,12 +1116,102 @@ class SimpleFS(ChunkSystem):
 		raise Exception('Not Implement')
 	def WriteFileFromMemory(self, foff, data, off = 0):
 		raise Exception('Not Implement')
+	def __PushChunksInChain(self, chunk):
+		bpsz = self.GetBasePageSize()
+		client = self.client
+		cs = self.cs
+		while chunk != 0:
+			nchunk, size = struct.unpack('>QQ', client.Read(chunk, 16))
+			
+			# calculate level and push chunk back
+			level = (size / bpsz) - 1
+			cs.PushChunk(level, chunk)
+			
+			chunk = nchunk
+			
 	def TruncateFile(self, foff, newsize):
-		raise Exception('Not Implement')
+		client = self.client
+		cs = self.cs
+		next, nchunk, csize, dlen, nlen = struct.unpack('>QQQQH', client.Read(foff, 8 * 4 + 2))
+		hoff = 8 * 4 + 2
+		chunk = foff
+		tsize = 0
+		csize = csize - nlen
+		while chunk != 0:
+			tsize = tsize + (csize - hoff)
+			dlen = dlen - (csize - hoff)
+			
+			# we are going to have to make it smaller
+			if tsize > newsize:
+				if nchunk != 0:
+					# okay, there is no need for another chunk so
+					# we can drop the next chunk and any others
+					cs.__PushChunksInChain(nchunk)
+				# now let us evaluate if this current change 
+				# can be made smaller and still contain the
+				# data
+				bpsz = cs.GetBasePageSize()
+				level = (csize / bpsz) - 1
+				while level > -1:
+					if bpsz << level < dlen:
+						# take previous level
+						level = level + 1
+						break
+					level = level - 1
+				
+				if level != (csize / bpsz) - 1:
+					# allocate new chunk that is smaller for data
+					_chunk = cs.PullChunk(level)
+					if _chunk is None:
+						return True
+					# copy old chunk data into new chunk
+					client.Copy(_chunk, chunk, bpsz << level)
+					# correctly set header of new chunk 
+					if hoff == 16:
+						# child chunk
+						client.Write(_chunk, struct.pack('>QQ', 0, bpsz << level))
+					else:
+						# master chunk >QQQQH
+						client.Write(_chunk + 8, struct.pack('>QQ', 0, bpsz << level)) 
+					
+					# write the 4th field of the master header to show new size
+					client.Write(foff + 8 * 3, struct.pack('>Q', newsize))
+					
+					# exit we are done
+					return True
+			
+			if nchunk == 0:				# if no more chunks then exit
+				break
+			chunk = nchunk				# get next chunk 
+			hoff = 16
+			nchunk, csize = struct.unpack('>QQ', client.Read(chunk, 16))
+		_chunk = chunk
+		# we are going to have to make it larger
+		if tsize < newsize:
+			# add some chunks to make up difference
+			chunks = cs.AllocChunksForSegment(newsize - tsize)
+			
+			if chunks is None:
+				return False
+			
+			for chunk in chunks:
+				# write header to point to this chunk we are adding
+				next, csize = struct.unpack('>QQ', client.Read(_chunk, 16))
+				client.Write(_chunk, struct.pack('>QQ', chunk[0], csize))
+				# write header for this chunk
+				client.Write(chunk, struct.pack('>QQ', 0, chunk[1]))
+				# set last chunk to this chunk
+				_chunk = chunk
+				# now loop will grab next chunk
+				
+		# exit we are done
+		return True
+		
 	def ReadFileIntoMemory(self, foff, offset = 0, length = None):
+		client = self.client
 		out = []
 		chunk = foff
-		next, nchunk, csize, dlen, nlen = struct.unpack('>QQQQH', self.Read(foff, 8 * 4 + 2))
+		next, nchunk, csize, dlen, nlen = struct.unpack('>QQQQH', client.Read(foff, 8 * 4 + 2))
 		foff = 8 * 4 + 2
 		while dlen > 0:
 			# process this chunk
@@ -1096,7 +1220,7 @@ class SimpleFS(ChunkSystem):
 			if ava > dlen:
 				ava = dlen
 			
-			data = self.Read(chunk + foff, ava)
+			data = client.Read(chunk + foff, ava)
 			dlen = dlen - ava
 		
 			out.append(data)
@@ -1104,16 +1228,19 @@ class SimpleFS(ChunkSystem):
 			# get next chunk
 			chunk = nchunk
 			foff = 16
-			nchunk, csize = struct.unpack('>QQ', self.Read(chunk, 16))
+			nchunk, csize = struct.unpack('>QQ', client.Read(chunk, 16))
 		return b''.join(data)
 	def WriteNewFileFromMemory(self, rpath, data):
-		chunks = self.AllocChunksForSegment(len(data) + len(rpath))
+		client = self.client
+		cs = self.cs
+		
+		chunks = cs.AllocChunksForSegment(len(data) + len(rpath))
 		
 		# [(offset, size, level), ...]
 		fchunk = chunks.pop()
 		rchunk = fchunk
 
-		f = struct.unpack('>Q', self.Read(self.metabase, 8))[0]
+		f = struct.unpack('>Q', client.Read(self.metabase, 8))[0]
 		
 		nlen = len(rpath)
 		
@@ -1135,12 +1262,12 @@ class SimpleFS(ChunkSystem):
 			if firstheader:
 				firstheader = False
 				# next file chunk, next chunk in this size, this chunk size, data size, name size
-				self.Write(fchunk[0], struct.pack('>QQQQH', f, nchunk[0], fchunk[1], len(data), len(rpath)))
+				client.Write(fchunk[0], struct.pack('>QQQQH', f, nchunk[0], fchunk[1], len(data), len(rpath)))
 				hdrlen = 8 * 4 + 2
 				nextoff = 8
 			else:
 				# next chunk in this file, this chunk size
-				self.Write(fchunk[0], struct.pack('>QQ', nchunk[0], fchunk[1]))
+				client.Write(fchunk[0], struct.pack('>QQ', nchunk[0], fchunk[1]))
 				hdrlen = 8 * 2
 				nextoff = 0
 				
@@ -1150,7 +1277,7 @@ class SimpleFS(ChunkSystem):
 				if crem > len(wdata):
 					crem = len(wdata) - doff
 				print('writing %s bytes of data out of %s' % (crem, len(wdata)))
-				self.Write(fchunk[0] + hdrlen, wdata[doff:doff + crem])
+				client.Write(fchunk[0] + hdrlen, wdata[doff:doff + crem])
 				doff = doff + crem
 			# lchunk is used at end if more data remaining
 			lchunk = fchunk	
@@ -1164,24 +1291,27 @@ class SimpleFS(ChunkSystem):
 			chunk = self.PullChunk(0)
 			print('allocated final chunk:%x of size:%x' % (chunk, 4096))
 			# link from last chunk to this chunk
-			self.Write(fchunk[0] + nextoff, struct.pack('>Q', chunk[0]))
+			client.Write(fchunk[0] + nextoff, struct.pack('>Q', chunk[0]))
 			# write our header
-			self.Write(chunk[0], struct.pack('>QQ', 0, chunk[1]))
+			client.Write(chunk[0], struct.pack('>QQ', 0, chunk[1]))
 			off = 8 * 2
 			# write remaining data
-			self.Write(chunk[0] + off, data[doff:])
+			client.Write(chunk[0] + off, data[doff:])
 		
 		# i write the 
-		self.Write(self.metabase, struct.pack('>Q', rchunk[0]))
+		client.Write(self.metabase, struct.pack('>Q', rchunk[0]))
 		
 def doClient(rhost, bid):
 	# 192.168.1.120
-	fs = SimpleFS('192.168.1.120', 1874, bytes(sys.argv[1], 'utf8'))
+	client = Client('192.168.1.120', 1874, bytes(sys.argv[1], 'utf8'))
+	cman = ChunkPushPullSystem(client)
+	cman.Format()
+	fs = SimpleFS(cman)
+	fs.Format()
 	
-	fs.SetCommunicationExceptionTime(45)
-	fs.SetRelinkTimeout(15)
+	client.SetCommunicationExceptionTime(45)
+	client.SetRelinkTimeout(15)
 	
-	fs.Format(force = True)
 	fs.WriteNewFileFromMemory(b'/home/kmcguire/a', b'hella world')
 	fs.WriteNewFileFromMemory(b'/home/kmcguire/b', b'hellb world')
 	fs.WriteNewFileFromMemory(b'/home/kmcguire/c', b'hellc world')
@@ -1189,32 +1319,34 @@ def doClient(rhost, bid):
 	list = fs.EnumerateFileList()
 	print(list)
 	
-	
-	
-	fs.TestSegmentAllocationAndFree()
+	#self.TruncateFile(foff, newsize)
 
 '''
 key = IDGen.gen(512)
 m = SymCrypt(key)
 st = time.time()
 z = 0
-for x in range(0, 100000):
-	o = IDGen.gen(1500)
 
-	c = m.crypt(o)
-	p = m.decrypt(c)
-	
-	if p != o:
-		print('FAILED')
-		exit()
-	
-	z = z + 1
-	if z > 50:
-		z = 0
-		print('ps', (time.time() - st) / (x + 1))
+#o = IDGen.gen(1500)
+o = b'hello world ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+
+print(key[0:len(o)])
+
+c = m.crypt(o)
+
+print(c)
+p = m.decrypt(c)
+print(p)
+if p != o:
+	print('FAILED')
+	exit()
+
+z = z + 1
+if z > 50:
+	z = 0
+	print('ps', (time.time() - st) / (x + 1))
 exit()
 '''
-
 
 # if main module then execute main routine
 if __name__ == '__main__':
