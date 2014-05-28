@@ -12,6 +12,8 @@ class SymCrypt:
 	def __init__(self, key):
 		self.key = key
 	def __both(self, data):
+		if True:
+			return data
 		di = 0
 		ki = 0
 		key = self.key
@@ -19,12 +21,78 @@ class SymCrypt:
 		while di < len(data):
 			out.append(data[di] ^ key[ki])
 			di = di + 1
-			ki = len(key) % (ki + 1)
+			if ki >= len(key):
+				ki = 0
+			else:
+				ki = ki + 1
 		return bytes(out)
+		
+	def mix(self, data):
+		data = bytearray(data)
+	
+		dl = len(data)
+		key = self.key
+		
+		di = 0
+		ki = 0
+		while di < dl:
+			b = data[di]
+			
+			if key[ki] != 0:
+				tondx = (dl - 1) % key[ki]
+			
+			data[di] = data[tondx]
+			data[tondx] = b
+			
+			di = di + 1
+			if ki >= len(key):
+				ki = 0
+			else:
+				ki = ki + 1
+		return data
+		
+	def unmix(self,  data):
+		data = bytearray(data)
+		dl = len(data)
+		key = self.key
+		mix = []
+		
+		# generate the sequence so that
+		# i can play it backwards
+		di = 0
+		ki = 0
+		while di < dl:
+			if key[ki] == 0:
+				continue
+			tondx = (dl - 1) % key[ki]
+			mix.append((di, tondx))
+			di = di + 1
+			if ki >= len(key):
+				ki = 0
+			else:
+				ki = ki + 1
+	
+		ml = len(mix)
+		mi = ml - 1
+		
+		while mi > -1:
+			frmndx = mix[mi][0]
+			tondx = mix[mi][1]
+		
+			a = data[tondx]
+			b = data[frmndx]
+			
+			data[tondx] = b
+			data[frmndx] = a
+		
+			mi = mi - 1
+		return data
+		
 	def crypt(self, data):
-		return self.__both(data)
+		return self.mix(self.__both(data))
+		
 	def decrypt(self, data):
-		return self.__both(data)
+		return self.__both(self.unmix(data))
 	
 class PktCodeClient:
 	GetPublicKey 		= 0
@@ -196,7 +264,7 @@ def BuildEncryptedMessage(link, data, vector = None):
 	m.update(data)
 	hash = m.digest()
 	#hash = bytearray(64)
-	
+		
 	# encrypt data (but not ulid and type code)
 	data = hash + data
 	
@@ -226,7 +294,7 @@ def ProcessRawSocketMessage(link, data):
 		print('@', end='')
 		return (None, data, None)
 	data = data[4:]
-	
+		
 	# decrypt remaining message
 	data = crypter.decrypt(data)
 	
