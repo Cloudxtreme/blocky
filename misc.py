@@ -10,12 +10,13 @@ import time
 
 class SymCrypt:
 	def __init__(self, key):
-		self.key = key
+		self.xkey = key[0:len(key) >> 1]
+		self.mkey = key[len(key) >> 1:]
 		
 	def __both(self, data):
 		di = 0
 		ki = 0
-		key = self.key
+		key = self.xkey
 		out = []
 		while di < len(data):
 			out.append(data[di] ^ key[ki])
@@ -29,7 +30,7 @@ class SymCrypt:
 		data = bytearray(data)
 	
 		dl = len(data)
-		key = self.key
+		key = self.mkey
 		
 		di = 0
 		ki = 0
@@ -53,7 +54,7 @@ class SymCrypt:
 	def unmix(self,  data):
 		data = bytearray(data)
 		dl = len(data)
-		key = self.key
+		key = self.mkey
 
 		mix = []
 		# generate the sequence so that
