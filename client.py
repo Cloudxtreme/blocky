@@ -1084,6 +1084,28 @@ class SimpleFS(ChunkSystem):
 		raise Exception('Not Implement')
 	def TruncateFile(self, foff, newsize):
 		raise Exception('Not Implement')
+	def ReadFileIntoMemory(self, foff, offset = 0, length = None):
+		out = []
+		chunk = foff
+		next, nchunk, csize, dlen, nlen = struct.unpack('>QQQQH', self.Read(foff, 8 * 4 + 2))
+		foff = 8 * 4 + 2
+		while dlen > 0:
+			# process this chunk
+			ava = csize - foff
+			
+			if ava > dlen:
+				ava = dlen
+			
+			data = self.Read(chunk + foff, ava)
+			dlen = dlen - ava
+		
+			out.append(data)
+		
+			# get next chunk
+			chunk = nchunk
+			foff = 16
+			nchunk, csize = struct.unpack('>QQ', self.Read(chunk, 16))
+		return b''.join(data)
 	def WriteNewFileFromMemory(self, rpath, data):
 		chunks = self.AllocChunksForSegment(len(data) + len(rpath))
 		
@@ -1152,9 +1174,6 @@ class SimpleFS(ChunkSystem):
 		# i write the 
 		self.Write(self.metabase, struct.pack('>Q', rchunk[0]))
 		
-	def ReadFileIntoMemory(self, rpath, offset = 0, length = None):
-		raise Exception('Not Implement')
-		
 def doClient(rhost, bid):
 	# 192.168.1.120
 	fs = SimpleFS('192.168.1.120', 1874, bytes(sys.argv[1], 'utf8'))
@@ -1173,6 +1192,29 @@ def doClient(rhost, bid):
 	
 	
 	fs.TestSegmentAllocationAndFree()
+
+'''
+key = IDGen.gen(512)
+m = SymCrypt(key)
+st = time.time()
+z = 0
+for x in range(0, 100000):
+	o = IDGen.gen(1500)
+
+	c = m.crypt(o)
+	p = m.decrypt(c)
+	
+	if p != o:
+		print('FAILED')
+		exit()
+	
+	z = z + 1
+	if z > 50:
+		z = 0
+		print('ps', (time.time() - st) / (x + 1))
+exit()
+'''
+
 
 # if main module then execute main routine
 if __name__ == '__main__':

@@ -11,9 +11,8 @@ import time
 class SymCrypt:
 	def __init__(self, key):
 		self.key = key
+		
 	def __both(self, data):
-		if True:
-			return data
 		di = 0
 		ki = 0
 		key = self.key
@@ -21,10 +20,9 @@ class SymCrypt:
 		while di < len(data):
 			out.append(data[di] ^ key[ki])
 			di = di + 1
+			ki = ki + 1
 			if ki >= len(key):
 				ki = 0
-			else:
-				ki = ki + 1
 		return bytes(out)
 		
 	def mix(self, data):
@@ -38,40 +36,41 @@ class SymCrypt:
 		while di < dl:
 			b = data[di]
 			
-			if key[ki] != 0:
-				tondx = (dl - 1) % key[ki]
+			kv = key[ki]
+			if kv == 0:
+				kv = 1
+			tondx = (dl - 1) % kv
 			
 			data[di] = data[tondx]
 			data[tondx] = b
 			
 			di = di + 1
+			ki = ki + 1
 			if ki >= len(key):
 				ki = 0
-			else:
-				ki = ki + 1
-		return data
+		return bytes(data)
 		
 	def unmix(self,  data):
 		data = bytearray(data)
 		dl = len(data)
 		key = self.key
+
 		mix = []
-		
 		# generate the sequence so that
 		# i can play it backwards
 		di = 0
 		ki = 0
 		while di < dl:
-			if key[ki] == 0:
-				continue
-			tondx = (dl - 1) % key[ki]
+			kv = key[ki]
+			if kv == 0:
+				kv = 1
+			tondx = (dl - 1) % kv
 			mix.append((di, tondx))
 			di = di + 1
+			ki = ki + 1
 			if ki >= len(key):
 				ki = 0
-			else:
-				ki = ki + 1
-	
+
 		ml = len(mix)
 		mi = ml - 1
 		
@@ -86,7 +85,7 @@ class SymCrypt:
 			data[frmndx] = a
 		
 			mi = mi - 1
-		return data
+		return bytes(data)
 		
 	def crypt(self, data):
 		return self.mix(self.__both(data))
