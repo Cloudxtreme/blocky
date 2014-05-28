@@ -191,22 +191,26 @@ def server(lip, lport):
 							# decrement the block ref
 							block['ref'] = block['ref'] - 1
 							if block['ref'] < 1:
-								if block['fd'] is not None:
-									# close the file handle
-									block['fd'].close()
 								# drop the block from memory
 								bid = block['id']
-								if bid in blocks:
-									del blocks[bid]
-									print('dropped block [%s]' % bid)
-									# we can not store the mmap object
-									block['mm'] = None
-									# should be better setting this to zero
-									block['lmt'] = 0
-									# write updated block info to disk
-									fd = open('block.%s' % bid, 'w')
-									pprint.pprint(block, fd)
-									fd.close()
+								# delete it from the blocks list
+								print('blocks', blocks)
+								del blocks[bytes(bid, 'utf8')]
+								print('dropped block [%s]' % bid)
+								# flush data to disk
+								block['mm'].flush()
+								# close the mmap 
+								block['mm'].close()
+								# close the OS file handler
+								os.close(block['fd'])
+								# we can not store mm so None it out
+								block['mm'] = None
+								# should be better setting this to zero
+								block['lmt'] = 0
+								# write updated block info to disk
+								fd = open('block.%s' % bid, 'w')
+								pprint.pprint(block, fd)
+								fd.close()
 									
 									
 						# drop the link
@@ -484,7 +488,7 @@ def server(lip, lport):
 						else:
 							print('block file [%s] does not exist' % bpath)
 							# tell them they failed
-							data = struct.pack('>BI', PktCodeServer.BlockConnectFailure, nid)
+							data = struct.pack('>BIQ', PktCodeServer.BlockConnectFailure, nid, vector)
 							data, _vector = BuildEncryptedMessage(link, data)
 							link['outgoing'][_tmp] = (_tmp, 0, data)
 							continue
@@ -494,7 +498,7 @@ def server(lip, lport):
 					block['id'] = bid
 					
 					if block['ref'] > block['maxref']:
-						data, _tmp = BuildEncryptedMessage(link, struct.pack('>BI', PktCodeServer.BlockConnectFailure, nid))
+						data, _tmp = BuildEncryptedMessage(link, struct.pack('>BIQ', PktCodeServer.BlockConnectFailure, nid, vector))
 						link['outgoing'][_tmp] = (_tmp, 0, data)
 						continue				
 					
@@ -515,8 +519,10 @@ def server(lip, lport):
 						ofd = os.open(block['path'], os.O_RDWR)
 						#f = open(block['path'], 'r+')
 						#access = mmap.ACCESS_WRITE
+						block['fd'] = ofd
 						block['mm'] = mmap.mmap(ofd, block['size'])
-					data, _tmp = BuildEncryptedMessage(link, struct.pack('>BI', PktCodeServer.BlockConnectSuccess, nid))
+					print('send block connect success')
+					data, _tmp = BuildEncryptedMessage(link, struct.pack('>BIQ', PktCodeServer.BlockConnectSuccess, nid, vector))
 					link['outgoing'][_tmp] = (_tmp, 0, data)
 					continue
 				# go ahead and get the block and fd ready
