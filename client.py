@@ -98,9 +98,8 @@ class Client(interface.StandardClient):
 	def Finish(self):
 		self.CacheFlush()
 		while self.GetOutstandingCount() > 0:
-			for k in client.outgoing:
-				pkt = client.outgoing[k]
-				print(pkt)
+			for k in self.outgoing:
+				pkt = self.outgoing[k]
 			self.HandlePackets()
 			time.sleep(0.2)
 		
@@ -347,13 +346,35 @@ class Client(interface.StandardClient):
 		if block and ret is None:
 			raise OperationException()
 		return ret
+
+	def Copy(self, dst, src, length, block = True, cache = True, ticknet = False, discard = True, wt = True):
+		if cache:
+			ret = self.CacheRead(src, length)
+			if ret is None:
+				return ret
+			self.CacheWrite(dst, ret, wt = wt)
+			
+		_data = struct.pack('>BQQQ', PktCodeClient.Copy, dst, src, length)
+		data, vector = BuildEncryptedMessage(self.link, _data)
+		self.outgoing[vector] = (vector, 0, data, self.crypter, _data)
 		
-	'''
-		If blocking:
-			Will return bytes or raise Exception for failure.
-		If non-blocking:
-			Will return None
-	'''
+		if discard is False and block is False:
+			# discard the write reply when it arrives
+			self.vexecuted[vector] = True
+			
+		if block is False and tickned is False:
+			return
+		
+		if block is False:
+			vector = None
+			
+		ret = self.HandlePackets(getvector = vector)
+		if block and ret is None:
+			raise OperationException()
+		return ret
+		
+		
+		
 	def Read(self, offset, length, block = True, cache = True, ticknet = False, discard = True):
 		self.DoBlockingLinkSetup()
 		
@@ -542,7 +563,7 @@ class Client(interface.StandardClient):
 			# AND we are supposed to handle the relink then attempt
 			# to relink
 			#print('handlerelink:%s lmst-delta:%s lmt-delta:%s' % (handlerelink, ct - self.lmst, ct - self.lmt))
-			if handlerelink and ct - self.lmst > self.relinkafter and ct - self.lmt > self.relinkafter:
+			if handlerelink and len(self.outgoing) > 0 and ct - self.lmst > self.relinkafter and ct - self.lmt > self.relinkafter:
 			#if handlerelink and self.lmt > 0 and self.lmst - self.lmt > self.relinkafter:
 				# okay link is considered bad, try to setup a link again
 				self.linkvalid = False
@@ -775,24 +796,27 @@ class Client(interface.StandardClient):
 def doClient(rhost, bid):
 	# 192.168.1.120
 	client = Client('192.168.1.120', 1874, bytes(bid, 'utf8'))
-	cs = ChunkPushPullSystem(client)
-	#cs.Format()
+	cs = ChunkPushPullSystem(client, load = False)
+	cs.Format()
 	fs = SimpleFS(cs)
-	#fs.Format()
+	fs.Format()
 	
 	client.SetCommunicationExceptionTime(45)
 	client.SetRelinkTimeout(15)
 	
-	if False:
+	if True:
 		fs.WriteNewFileFromMemory(b'/home/kmcguire/a', b'hella world')
 		fs.WriteNewFileFromMemory(b'/home/kmcguire/b', b'hellb world')
 		fs.WriteNewFileFromMemory(b'/home/kmcguire/c', b'hellc world')
 		fs.WriteNewFileFromMemory(b'/home/kmcguire/d', b'helld world')
-	list = fs.EnumerateFileList()
-	print(list)
 	#cs.TestSegmentAllocationAndFree()
 	
-	#self.TruncateFile(list[0][1], 24)
+	list = fs.EnumerateFileList()
+	
+	fs.TruncateFile(list[0][1], 4096 * 5)
+	
+	list = fs.EnumerateFileList()
+	print(list)
 
 	client.Finish()
 	

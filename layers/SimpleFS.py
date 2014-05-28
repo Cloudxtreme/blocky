@@ -78,30 +78,36 @@ class SimpleFS(layers.interface.BasicFS):
 		chunk = foff
 		tsize = 0
 		csize = csize - nlen
+		print('truncate')
+		
 		while chunk != 0:
 			tsize = tsize + (csize - hoff)
 			dlen = dlen - (csize - hoff)
 			
 			# we are going to have to make it smaller
 			if tsize > newsize:
+				print('tsize > newsize')
 				if nchunk != 0:
 					# okay, there is no need for another chunk so
 					# we can drop the next chunk and any others
 					cs.__PushChunksInChain(nchunk)
-				# now let us evaluate if this current change 
+				# now let us evaluate if this current change
 				# can be made smaller and still contain the
 				# data
 				bpsz = cs.GetBasePageSize()
-				level = (csize / bpsz) - 1
-				while level > -1:
+				level = int((csize / bpsz) - 1)
+				while level != 0:
 					if bpsz << level < dlen:
 						# take previous level
 						level = level + 1
 						break
 					level = level - 1
 				
+				print('got level:%s original-level:%s' % (level, int(csize / bpsz)))
+				
 				if level != (csize / bpsz) - 1:
 					# allocate new chunk that is smaller for data
+					print('level', level)
 					_chunk = cs.PullChunk(level)
 					if _chunk is None:
 						return True
@@ -122,6 +128,7 @@ class SimpleFS(layers.interface.BasicFS):
 					return True
 			
 			if nchunk == 0:				# if no more chunks then exit
+				print('no more chunks')
 				break
 			chunk = nchunk				# get next chunk 
 			hoff = 16
@@ -135,16 +142,29 @@ class SimpleFS(layers.interface.BasicFS):
 			if chunks is None:
 				return False
 			
+			if hoff == 16:
+				hoff = 0
+			else:
+				hoff = 8
+				
+			tmp, sz = struct.unpack('>QQ', client.Read(_chunk + hoff, 16))
+			
+			_chunk = (_chunk, sz)
 			for chunk in chunks:
-				# write header to point to this chunk we are adding
-				next, csize = struct.unpack('>QQ', client.Read(_chunk, 16))
-				client.Write(_chunk, struct.pack('>QQ', chunk[0], csize))
-				# write header for this chunk
-				client.Write(chunk, struct.pack('>QQ', 0, chunk[1]))
+				# just write the address of the next chunk
+				# hoff - adjusts for if this is the master chunk
+				client.Write(_chunk[0] + hoff, struct.pack('>Q', chunk[0]))
+				print('writeA chunk:%x --> next:%x size:%x' % (_chunk[0], chunk[0], _chunk[1]))
+				# write header for new chunk
+				client.Write(chunk[0], struct.pack('>QQ', 0, chunk[1]))
+				print('writeB chunk:%x --> next:0 csize:%x' % (chunk[0], chunk[1]))
 				# set last chunk to this chunk
 				_chunk = chunk
+				# if was set to 8 it is now set to 0
+				hoff = 0
 				# now loop will grab next chunk
-				
+			# write the new data size
+			client.Write(foff + 8 * 3, struct.pack('>Q', newsize))
 		# exit we are done
 		return True
 		
@@ -177,6 +197,8 @@ class SimpleFS(layers.interface.BasicFS):
 		
 		chunks = cs.AllocChunksForSegment(len(data) + len(rpath))
 		
+		print('writing new file to memory [%s]' % rpath)
+		
 		# [(offset, size, level), ...]
 		fchunk = chunks.pop()
 		rchunk = fchunk
@@ -199,7 +221,7 @@ class SimpleFS(layers.interface.BasicFS):
 			else:
 				nchunk = (0, 0, 0)
 			# write header
-			print('writing header for chunk:%x nchunk:%x' % (fchunk[0], nchunk[0]))
+			print('	writing header for chunk:%x nchunk:%x' % (fchunk[0], nchunk[0]))
 			if firstheader:
 				firstheader = False
 				# next file chunk, next chunk in this size, this chunk size, data size, name size
@@ -217,7 +239,7 @@ class SimpleFS(layers.interface.BasicFS):
 				crem = fchunk[1] - hdrlen
 				if crem > len(wdata):
 					crem = len(wdata) - doff
-				print('writing %s bytes of data out of %s' % (crem, len(wdata)))
+				print('	writing %s bytes of data out of %s' % (crem, len(wdata)))
 				client.Write(fchunk[0] + hdrlen, wdata[doff:doff + crem])
 				doff = doff + crem
 			# lchunk is used at end if more data remaining
@@ -226,6 +248,7 @@ class SimpleFS(layers.interface.BasicFS):
 			fchunk = nchunk
 		# is there still name data or file data left
 		if doff < len(data):
+			printf('	some data left')
 			# allocate one more page
 			need = (len(data) - doff) + 8 * 2
 			assert(need < 4096)

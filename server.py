@@ -190,12 +190,15 @@ def server(lip, lport):
 						if block is not None:
 							# decrement the block ref
 							block['ref'] = block['ref'] - 1
+							print('block[%s][ref]:%s' % (block['id'], block['ref']))
 							if block['ref'] < 1:
 								# drop the block from memory
 								bid = block['id']
 								# delete it from the blocks list
 								print('blocks', blocks)
-								del blocks[bytes(bid, 'utf8')]
+								# TODO: fix this bug
+								if bid in blocks:
+									del blocks[bid]
 								print('dropped block [%s]' % bid)
 								# flush data to disk
 								block['mm'].flush()
@@ -220,7 +223,7 @@ def server(lip, lport):
 				del links[e[0]][e[1]]
 				if len(links[e[0]]) < 1:
 					del links[e[0]]
-					print('dropping link %s:%s' % (e[0], e[1]))
+				print('dropping link %s:%s' % (e[0], e[1]))
 	
 		# --------------- UPDATED BLOCKS ----------------
 		# go through and look for blocks which have been updated
@@ -452,6 +455,18 @@ def server(lip, lport):
 					bid = data
 					if bid not in blocks:
 						bid = bid.decode('utf8', 'ignore')
+						
+						# take care of a few things to prevent someone
+						# from building their own arbitrary path
+						bid = bid.replace('~', 'a')
+						bid = bid.replace('/', 'b')
+						bid = bid.replace('\\', 'c')
+						l = len(bid) + 1
+						while len(bid) != l:
+							l = len(bid)
+							bid = bid.replace('..', '.')
+							
+						
 						# see if we load the block into memory from disk
 						bpath = 'block.%s' % bid
 					
@@ -493,7 +508,6 @@ def server(lip, lport):
 							link['outgoing'][_tmp] = (_tmp, 0, data)
 							continue
 					# they connected, so open the block if it is not open already
-					link['block'] = blocks[bid]
 					block = blocks[bid]
 					block['id'] = bid
 					
@@ -502,6 +516,7 @@ def server(lip, lport):
 						link['outgoing'][_tmp] = (_tmp, 0, data)
 						continue				
 					
+					link['block'] = blocks[bid]
 					block['ref'] = block['ref'] + 1
 					
 					if block['mm'] is None:
@@ -538,7 +553,7 @@ def server(lip, lport):
 					link['outgoing'][_tmp] = (_tmp, 0, data)
 					continue					
 				
-				mm = block['mm']
+				mm = block['mm']					
 				
 				if type == PktCodeClient.WriteHold:
 					offset = struct.unpack_from('>Q', data)[0]
@@ -593,6 +608,14 @@ def server(lip, lport):
 					# clear write holds
 					link['wholds'] = []
 					
+					data = struct.pack('>BQQH', PktCodeServer.WriteSuccess, vector, 0, 0)
+					data, _tmp = BuildEncryptedMessage(link, data)
+					link['outgoing'][_tmp] = (_tmp, 0, data)
+					continue
+					
+				if type == PktCodeClient.Copy:
+					dst, src, length = struct.unpack_from('>QQQ', data)
+					mm.move(dst, src, length)
 					data = struct.pack('>BQQH', PktCodeServer.WriteSuccess, vector, 0, 0)
 					data, _tmp = BuildEncryptedMessage(link, data)
 					link['outgoing'][_tmp] = (_tmp, 0, data)

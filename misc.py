@@ -111,6 +111,7 @@ class PktCodeClient:
 	GetWriteHoldCount	= 13
 	FlushWriteHold	 	= 14
 	Ack					= 15
+	Copy				= 16
 		
 class PktCodeServer:
 	PublicKey			= 0

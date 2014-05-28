@@ -12,9 +12,17 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 	def GetLevelCount(self):
 		return self.levels
 	
-	def __init__(self, client):
+	def __init__(self, client, load = True):
 		self.client = client
+
+		if load:
+			Load()
+		else:
+			self.levels = 28
+			self.base = 4096
+			self.bucketmaxslots = int((self.base - 10) / 8)
 		
+	def Load(self):
 		levels, doffset, base = struct.unpack('>IQQ', client.Read(100, 4 + 8 * 2))
 		self.levels = levels
 		self.base = base
@@ -28,18 +36,8 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 		client.Write(0, bytes((0, 0, 0, 0, 0, 0, 0, 0)))
 		# get block size
 		bsz = client.GetBlockSize()
-		
-		# B=status Q=size
-		# 000 - whole
-		# 001 - split 
-		# 002 - fully used (not fully used)
-		
-		# for 1GB there are 19 levels (0-18)
-		levels = 28
-		self.levels = levels
-		
-		self.base = 4096
-		self.bucketmaxslots = int((self.base - 10) / 8)
+				
+		levels = self.levels
 		
 		print('max storage size:%s' % ((4096 << (levels - 1)) * 510))
 		
@@ -300,7 +298,7 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 					#print('			filling level was fale')
 					return None
 				return self.__PullChunk(level, slackpages)
-			client.Write(200 + ulevel * 8, struct.pack('>Q', next))
+			client.Write(200 + level * 8, struct.pack('>Q', next))
 			# store this unused base sized page
 			slackpages.append(boff)
 			# try again..
