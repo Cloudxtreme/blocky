@@ -21,10 +21,12 @@ class CommunicationException(Exception):
 class WriteHoldCountException(Exception):
 	pass
 	
+class StandardClient():
+	pass
 '''
 	This will create a client object and provide access to the remote block.
 '''
-class Client():
+class Client(StandardClient):
 	class NoLinkException(Exception):
 		pass
 
@@ -646,18 +648,27 @@ class Client():
 					print('link changed from old:%s to new:%s' % (self.link['ulid'], data))
 				self.link['vman'] = VectorMan()
 				self.link['ulid'] = data
+				print('connecting to block')
 				self.ConnectBlock(self.bid)
 		elif	type == PktCodeServer.BlockConnectFailure:
-			nid = struct.unpack_from('>I', data)[0]
+			nid, vector = struct.unpack_from('>IQ', data)[0]
 			if nid == self.nid:
 				raise Exception('Failure Connecting To Block')
+			return (True, vector, False)
 		elif	type == PktCodeServer.NoLink:
 			self.linkvalid = False
 			#print('no link so doing reconnect')
 			raise Client.NoLinkException()
 		elif 	type == PktCodeServer.BlockConnectSuccess:
-			print('block connected')
+			print(len(data))
+			nid, vector = struct.unpack_from('>IQ', data)
+			# TODO: this could be trouble... link delay.. server queues
+			# up block connect... then later client relinks up.. gets
+			# older one.. screws things up maybe?
 			self.linkvalid = True
+			if vector == getvector:
+				return (True, vector, True)
+			return (True, vector, False)
 		elif	type == PktCodeServer.FlushWriteHold:
 				vector = struct.unpack_from('>Q', data)[0]
 				if vector == getvector:
@@ -757,8 +768,6 @@ class ChunkPushPullSystem(ChunkSystem):
 	
 	def __init__(self, client):
 		self.client = client
-	
-		sig = client.Read(0, 8)
 		
 		levels, doffset, base = struct.unpack('>IQQ', client.Read(100, 4 + 8 * 2))
 		self.levels = levels
@@ -847,6 +856,8 @@ class ChunkPushPullSystem(ChunkSystem):
 		return
 
 	def TestSegmentAllocationAndFree(self):
+		client = self.client
+	
 		tpb = 0
 		tpbc = 0
 		lsz = 0
@@ -883,6 +894,7 @@ class ChunkPushPullSystem(ChunkSystem):
 					self.PushChunk(chunk[2], chunk[0])
 				
 				del segments[i]
+				print('		done freeing')
 				# try to allocate again, and if fails
 				# then we will free another
 				continue
@@ -1063,12 +1075,11 @@ class SimpleFS(BasicFS):
 	def __init__(self, cs):
 		self.cs = cs
 		self.client = cs.GetClient()
+		self.metabase = 500
 		
 	def Format(self):
 		client = self.client
 		cs = self.cs
-		# the base for any master meta-data
-		self.metabase = 500
 		# write our signature field
 		client.Write(16, b'sifssifs')
 		client.Write(self.metabase, struct.pack('>Q', 0))
@@ -1079,12 +1090,12 @@ class SimpleFS(BasicFS):
 		cur = struct.unpack('>Q', client.Read(self.metabase, 8))[0]
 		while cur != 0:
 			# read file header
-			print('reading header:%x' % cur)
+			print('@@@ reading header:%x' % cur)
 			next, nchunk, tsize, dlen, nlen = struct.unpack('>QQQQH', client.Read(cur, 8 * 4 + 2))
 			# next file, next chunk, tchunksize, datalen, namelen
 			# read file name
 			
-			print('next:%x chunk:%s tsize:%s dlen:%s nlen:%s' % (next, nchunk, tsize, dlen, nlen))
+			print('		next:%x chunk:%s tsize:%s dlen:%s nlen:%s' % (next, nchunk, tsize, dlen, nlen))
 			off = cur + 8 * 4 + 2
 			name = []
 			while nlen > 0:
@@ -1094,7 +1105,7 @@ class SimpleFS(BasicFS):
 				else:
 					clen = nlen
 				nlen = nlen - clen
-				print('reading name part off:%x clen:%x' % (off, clen))
+				print('		reading name part off:%x clen:%x' % (off, clen))
 				name.append(client.Read(off, clen))
 				boff = nchunk
 				if boff == 0 or nlen < 1:
@@ -1102,7 +1113,7 @@ class SimpleFS(BasicFS):
 				nchunk, tsize = struct.unpack('>QQ', client.Read(boff, 8 + 8))
 				off = boff + 16
 			name = (b''.join(name)).decode('utf8', 'ignore')
-			files.append((name, cur))
+			files.append((name, cur, dlen))
 			# get next file
 			cur = next
 		return files
@@ -1298,29 +1309,41 @@ class SimpleFS(BasicFS):
 			# write remaining data
 			client.Write(chunk[0] + off, data[doff:])
 		
-		# i write the 
+		print('wrote [%s] to root' % rpath)
 		client.Write(self.metabase, struct.pack('>Q', rchunk[0]))
 		
 def doClient(rhost, bid):
 	# 192.168.1.120
-	client = Client('192.168.1.120', 1874, bytes(sys.argv[1], 'utf8'))
-	cman = ChunkPushPullSystem(client)
-	cman.Format()
-	fs = SimpleFS(cman)
-	fs.Format()
+	client = Client('192.168.1.120', 1874, bytes(bid, 'utf8'))
+	cs = ChunkPushPullSystem(client)
+	#cs.Format()
+	fs = SimpleFS(cs)
+	#fs.Format()
 	
 	client.SetCommunicationExceptionTime(45)
 	client.SetRelinkTimeout(15)
 	
-	fs.WriteNewFileFromMemory(b'/home/kmcguire/a', b'hella world')
-	fs.WriteNewFileFromMemory(b'/home/kmcguire/b', b'hellb world')
-	fs.WriteNewFileFromMemory(b'/home/kmcguire/c', b'hellc world')
-	fs.WriteNewFileFromMemory(b'/home/kmcguire/d', b'helld world')
+	if False:
+		fs.WriteNewFileFromMemory(b'/home/kmcguire/a', b'hella world')
+		fs.WriteNewFileFromMemory(b'/home/kmcguire/b', b'hellb world')
+		fs.WriteNewFileFromMemory(b'/home/kmcguire/c', b'hellc world')
+		fs.WriteNewFileFromMemory(b'/home/kmcguire/d', b'helld world')
 	list = fs.EnumerateFileList()
 	print(list)
+	list = fs.EnumerateFileList()
+	print(list)	
+	#cs.TestSegmentAllocationAndFree()
 	
-	#self.TruncateFile(foff, newsize)
+	#self.TruncateFile(list[0][1], 24)
 
+	while client.GetOutstandingCount() > 0:
+		print('ocnt', client.GetOutstandingCount())
+		for k in client.outgoing:
+			pkt = client.outgoing[k]
+			print(pkt)
+		client.HandlePackets()
+		time.sleep(2)
+	
 '''
 key = IDGen.gen(512)
 m = SymCrypt(key)
