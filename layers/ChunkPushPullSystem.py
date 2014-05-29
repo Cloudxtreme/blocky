@@ -65,9 +65,11 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 		# i start with a larger size (more levels) or increase
 		# the smallest level i can handle larger blocks
 		fsz = 4096 << (levels - 1)
-		_bsz = bsz
+		# subtract everything before the data offset (because it is used)
+		_bsz = bsz - doffset
 		clevel = levels - 1
 		cmoff = doffset
+		
 		# make sure we do not go smaller than 4096 and that
 		# we have at least 4096 bytes left.. we just discard
 		# any extra at the end below 4096
