@@ -489,24 +489,28 @@ def server(lip, lport):
 								pprint.pprint(block, fd)
 								fd.close()
 						
-						if os.path.exists(bpath):
-							fd = open(bpath, 'r')
-							block = eval(fd.read())
-							fd.close()
-							blocks[bid] = block
-							# get last modified time so we can tell if we
-							# need to reload a block's meta data from disk
-							# such as when the size has been changed
-							block['lmt'] = os.path.getmtime(bpath)
-							block['path'] = '/home/kmcguire/block.%s' % (bid)
-							print('path:%s' % block['path'])
-						else:
-							print('block file [%s] does not exist' % bpath)
-							# tell them they failed
-							data = struct.pack('>BIQ', PktCodeServer.BlockConnectFailure, nid, vector)
-							data, _vector = BuildEncryptedMessage(link, data)
-							link['outgoing'][_tmp] = (_tmp, 0, data)
-							continue
+						# if block already loaded and opened
+						# then use that block instead of making
+						# new one...
+						if bid not in blocks:
+							if os.path.exists(bpath):
+								fd = open(bpath, 'r')
+								block = eval(fd.read())
+								fd.close()
+								blocks[bid] = block
+								# get last modified time so we can tell if we
+								# need to reload a block's meta data from disk
+								# such as when the size has been changed
+								block['lmt'] = os.path.getmtime(bpath)
+								block['path'] = '/home/kmcguire/block.%s' % (bid)
+								print('path:%s' % block['path'])
+							else:
+								print('block file [%s] does not exist' % bpath)
+								# tell them they failed
+								data = struct.pack('>BIQ', PktCodeServer.BlockConnectFailure, nid, vector)
+								data, _vector = BuildEncryptedMessage(link, data)
+								link['outgoing'][_tmp] = (_tmp, 0, data)
+								continue
 					# they connected, so open the block if it is not open already
 					block = blocks[bid]
 					block['id'] = bid
