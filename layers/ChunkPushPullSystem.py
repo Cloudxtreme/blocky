@@ -1,5 +1,7 @@
 import layers.interface
 import struct
+import random
+import time
 
 class ChunkPushPullSystem(layers.interface.ChunkSystem):
 	ChunkFree 		= 1
@@ -99,7 +101,7 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 		client.Write(0, b'cmancman')
 		return
 
-	def TestSegmentAllocationAndFree(self):
+	def UnitTest(self):
 		client = self.client
 	
 		tpb = 0
@@ -123,13 +125,13 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 			tpb = tpb + (tt / (sz / 1024 / 1024 / 1024))
 			tpbc = tpbc + 1
 			
-			print('average time per GB is %s and largest alloc is:%s' % (tpb / tpbc, lsz))
+			print('avg-time-GB:%s large-alloc:%s this-time:%s' % (tpb / tpbc, lsz, tt))
 			
 			#print(chunks)
 			
 			if chunks is None:
 				# free something
-				print('freeing segment')
+				st = time.time()
 				if len(segments) < 1:
 					continue
 				#exit()
@@ -138,7 +140,8 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 					self.PushChunk(chunk[2], chunk[0])
 				
 				del segments[i]
-				print('		done freeing')
+				tt = time.time() - st
+				print('freeing:%s' % tt)
 				# try to allocate again, and if fails
 				# then we will free another
 				continue
