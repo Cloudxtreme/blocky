@@ -10,6 +10,7 @@ import hashlib
 import time
 import math
 import layers.interface as interface
+import traceback
 from layers.SimpleFS import SimpleFS
 from layers.ChunkPushPullSystem import ChunkPushPullSystem
 
@@ -141,7 +142,6 @@ class Client(interface.StandardClient):
 		# align to page boundary
 		page = offset & ~0x3ff
 		# break offset down into local page offset
-		loffset = offset - page
 		dleft = length
 		
 		ct = time.time()
@@ -150,30 +150,40 @@ class Client(interface.StandardClient):
 		while dleft > 0:
 			if page not in cache:
 				self.CacheTick()
-				cache[page] = self.Read(page, 1024, block = True, cache = False)
-				#print('[read] cache page:%x' % (page))
+				# oops.. this sucks.. we need to check that we are
+				# not going to read past the end of our remote block
+				# and if we are cut this cache line short in size
+				blocksz = self.GetBlockSize()
+				if page >= blocksz:
+					raise OperationException('read past end of virtual block device')
+				if page + 1024 >= blocksz:
+					psz = blocksz - page
+				else:
+					psz = 1024
+				cache[page] = self.Read(page, psz, block = True, cache = False)
+				assert(len(cache[page]) == 1024)
+				print('[read] cache page:%x length:%x' % (page, len(cache[page])))
 			self.cache_lastread[page] = ct
 			# either a partial read or a full read
 			#print('		dleft:%x loffset:%x' % (dleft, loffset))
-			if dleft > (1024 - loffset):
-				lsize = 1024 - loffset
+			
+			loffset = offset - page
+			
+			if dleft > 1024 - loffset:
+				ava = 1024 - loffset
 			else:
-				lsize = dleft
+				ava = dleft
+			dleft = dleft - ava
 			
-			#print('cache read offset:%x loffset:%x lsize:%x' % (offset, loffset, lsize))
+			data = cache[page][loffset:loffset + ava]
+			out.append(data)
 			
-			out.append(cache[page][loffset:loffset + lsize])
-		
-			# subtract just what we read
-			dleft = dleft - lsize
 			
-			# prepare page and loffset
-			loffset = (loffset + lsize) & 0x3ff
-			# goto next page
-			page = page + 0x400
+			offset = offset + ava
+			page = offset & ~0x3ff
 		
 		out = b''.join(out)
-		#print(len(out), length)
+		print('len(out):%s length:%s' % (len(out), length))
 		assert(len(out) == length)
 		return out
 	
@@ -198,6 +208,8 @@ class Client(interface.StandardClient):
 			self.cache_lastwrite[page] = ct
 			#print('done')
 			
+			loffset = offset - page
+			
 			# either a partial write or full write
 			if dleft > 1024 - loffset:
 				lsize = 1024 - loffset
@@ -206,14 +218,19 @@ class Client(interface.StandardClient):
 				
 			#print('cache write offset:%x loffset:%x lsize:%s' % (offset, loffset, lsize))
 			
-			# this looks ugly but how else can i do it quickly
-			cache[page] = cache[page][0:loffset] + data[len(data) - dleft:lsize] + cache[page][loffset + lsize:]
+			# this looks ugly but how else can i do it quickly...?
+			cpage = cache[page]
+			doff = len(data) - dleft
+			towrite = data[doff:doff + lsize]
+			
+			cache[page] = cpage[0:loffset] + towrite + cpage[loffset + lsize:]
+			assert(len(cache[page]) == 1024)
 			
 			# subtract what we wrote
 			dleft = dleft - lsize
-			# parepare next page and loffset
-			loffset = (loffset + lsize) & 0x3ff
-			page = page + 0x400
+			
+			offset = offset + lsize
+			page = offset & ~0x3ff
 		
 	def FlushWriteHold(self):
 		_data = struct.pack('>B', PktCodeClient.FlushWriteHold)
@@ -283,8 +300,26 @@ class Client(interface.StandardClient):
 		self.wholds.append((offset, data))
 		
 		return self.Write(offset, data, block = block, hold = True, discard = discard, ticknet = ticknet, wt = wt)
-	
+		
 	def Write(self, offset, data, block = False, hold = False, discard = True, cache = True, wt = True, ticknet = False):
+		# split the write up if we need too if it is very large
+		if len(data) < 1200:
+			return self.__Write(offset, data, block = block, hold = block, discard = discard, cache = cache, wt = wt, ticknet = ticknet)
+		loffset = 0
+		rets = []
+		print('doing multiple write')
+		while offset < len(data):
+			lsz = 1200
+			if lsz > len(data) - offset:
+				lsz = len(data) - offset
+			_data = data[offset:offset + 1200]
+			loffset = loffset + 1200
+			print('loffset:%s' % loffset)
+			ret = self.__Write(offset + loffset, _data, block = block, hold = block, discard = discard, cache = cache, wt = wt, ticknet = ticknet)
+			rets.append(ret)
+		return rets
+	
+	def __Write(self, offset, data, block = False, hold = False, discard = True, cache = True, wt = True, ticknet = False):
 		self.DoBlockingLinkSetup()
 		
 		if hold:
@@ -541,7 +576,7 @@ class Client(interface.StandardClient):
 						self.sock.send(out[2])
 					except Exception as e:
 						print('WARNING: socket exception')
-						print(e)
+						traceback.print_exc(file = sys.stdout)
 						continue
 					# update time last sent
 					outgoing[out[0]] = (out[0], ct, out[2], out[3], out[4])
@@ -792,32 +827,55 @@ class Client(interface.StandardClient):
 		_data = struct.pack('>BI', PktCodeClient.BlockConnect, self.nid) + bid
 		data, vector = BuildEncryptedMessage(self.link, _data)
 		self.outgoing[vector] = (vector, 0, data, self.crypter, _data)
-				
+
+	'''
+		This will attempt to verify that indeed the cache is working
+		correctly. On each iteration it generates a random length 
+		string of data and writes it to a random offset. It then
+		reads the string back. This mainly tests writes and reads
+		across cache boundaries, and ensures that the cache code
+		handles these boundaries. If that code is changed this test
+		needs to be run to verify that the code still works correctly.
+	'''
+	def UnitTestCache(self):
+		bsz = self.GetBlockSize()
+		while True:
+			off = random.randint(1, bsz - 1)
+			sz = random.randint(1, 1024 * 2)
+			if sz > bsz - off:
+				sz = bsz - off 
+			
+			data = IDGen.gen(sz)
+			
+			print('writing offset:%x len:%x' % (off, sz))
+			self.Write(off, data)
+			
+			_data = self.Read(off, sz)
+			if data != _data:
+				print('NO GOOD')
+				return False
+			print('GOOD')
+		# execution will never reach here
+		return True
+		
 def doClient(rhost, bid):
 	# 192.168.1.120
 	client = Client('192.168.1.120', 1874, bytes(bid, 'utf8'))
+	
+	#client.Read(0, 8)
+	#client.UnitTestCache()
+	#exit()
+	
 	cs = ChunkPushPullSystem(client, load = False)
 	cs.Format()
+	
+	#cs.UnitTest()
+	#exit()
+	
 	fs = SimpleFS(cs)
-	fs.Format()
-	
-	client.SetCommunicationExceptionTime(45)
-	client.SetRelinkTimeout(15)
-	
-	if True:
-		fs.WriteNewFileFromMemory(b'/home/kmcguire/a', b'hella world')
-		fs.WriteNewFileFromMemory(b'/home/kmcguire/b', b'hellb world')
-		fs.WriteNewFileFromMemory(b'/home/kmcguire/c', b'hellc world')
-		fs.WriteNewFileFromMemory(b'/home/kmcguire/d', b'helld world')
-	#cs.TestSegmentAllocationAndFree()
-	
-	list = fs.EnumerateFileList()
-	
-	fs.TruncateFile(list[0][1], 4096 * 5)
-	
-	list = fs.EnumerateFileList()
-	print(list)
 
+	fs.UnitTest()
+	
 	client.Finish()
 	
 '''
