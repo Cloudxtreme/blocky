@@ -20,7 +20,6 @@ class SimpleFS(layers.interface.BasicFS):
 		cur = struct.unpack('>Q', client.Read(self.metabase, 8))[0]
 		while cur != 0:
 			# read file header
-			print('@@@ reading header:%x' % cur)
 			next, nchunk, tsize, dlen, nlen = struct.unpack('>QQQQH', client.Read(cur, 8 * 4 + 2))
 			# next file, next chunk, tchunksize, datalen, namelen
 			# read file name
@@ -55,21 +54,22 @@ class SimpleFS(layers.interface.BasicFS):
 		raise Exception('Not Implement')
 	def DeleteFile(self, foff):
 		raise Exception('Not Implement')
-	def WriteFileFromMemory(self, foff, data, off = 0):
-		raise Exception('Not Implement')
 	def __PushChunksInChain(self, chunk):
-		bpsz = self.GetBasePageSize()
-		client = self.client
 		cs = self.cs
+		client = self.client
+		
+		bpsz = cs.GetBasePageSize()
 		while chunk != 0:
 			nchunk, size = struct.unpack('>QQ', client.Read(chunk, 16))
 			
+			print('		pushing chunk:%x size:%x' % (chunk, size))
+			
 			# calculate level and push chunk back
 			level = (size / bpsz) - 1
+			
 			cs.PushChunk(level, chunk)
 			
 			chunk = nchunk
-			
 	def TruncateFile(self, foff, newsize):
 		client = self.client
 		cs = self.cs
@@ -90,7 +90,7 @@ class SimpleFS(layers.interface.BasicFS):
 				if nchunk != 0:
 					# okay, there is no need for another chunk so
 					# we can drop the next chunk and any others
-					cs.__PushChunksInChain(nchunk)
+					self.__PushChunksInChain(nchunk)
 				# now let us evaluate if this current change
 				# can be made smaller and still contain the
 				# data
@@ -167,100 +167,147 @@ class SimpleFS(layers.interface.BasicFS):
 			client.Write(foff + 8 * 3, struct.pack('>Q', newsize))
 		# exit we are done
 		return True
+	
+	def SetNameLength(self, foff, nlen):
+		client = self.client
+		client.Write(foff + 8 * 4, struct.pack('>H', nlen))
 		
-	def ReadFileIntoMemory(self, foff, offset = 0, length = None):
+	def CreateFile(self, path, size):
+		if type(path) is str:
+			path = bytes(path, 'utf8')
+		foff = self.AllocateFile(size + len(path))
+		#self.WriteFile(foff, None, path)
+		#self.SetNameLength(foff, len(path))
+		return foff
+		
+	def GetNameLength(self, foff):
+		client = self.client
+		next, nchunk, csize, dlen, nlen = struct.unpack('>QQQQ', client.Read(foff, 8 * 4 + 2))
+		return nlen
+	
+	def ReadFile(self, foff, offset, length):
+		return self.__RWFileMemory(foff, length = length, offset = offset)
+		
+	def WriteFile(self, foff, offset, data):
+		return self.__RWFileMemory(foff, offset = offset, data = data, write = True)
+		
+	def __RWFileMemory(self, foff, offset = 0, length = 0, data = None, write = False):
 		client = self.client
 		out = []
 		chunk = foff
 		next, nchunk, csize, dlen, nlen = struct.unpack('>QQQQH', client.Read(foff, 8 * 4 + 2))
 		foff = 8 * 4 + 2
-		while dlen > 0:
-			# process this chunk
-			ava = csize - foff
+		
+		# unless they specify None move them past the name string
+		if offset is not None:
+			offset = nlen + offset
+		else:
+			offset = 0
 			
+		if write is True:
+			dlen = len(data)
+		else:
+			dlen = length
+		boff = 0
+		while dlen > 0:
+			# figure out the most we can read from this chunk
+			ava = csize - foff
 			if ava > dlen:
 				ava = dlen
+			# are we past or at our offset
+			if boff >= offset:
+				aoff = offset - boff
+				# yes, let us read what we can or need
+				if write is False:
+					out.append(client.Read(chunk + foff + aoff, ava))
+				else:
+					client.Write(chunk + foff + aoff, data[offset:offset + ava])
+				dlen = dlen - ava
+				# increment offset further
+				offset = offset + ava
 			
 			data = client.Read(chunk + foff, ava)
 			dlen = dlen - ava
 		
 			out.append(data)
 		
-			# get next chunk
+			# track our base offset (minus the header)
+			boff = boff + (csize - foff)
+			# switch to next chunk
 			chunk = nchunk
+			if chunk == 0:
+				# exit even if not done reading
+				break
+			# header is only 16 bytes
 			foff = 16
+			# read next chunk and current chunk size
 			nchunk, csize = struct.unpack('>QQ', client.Read(chunk, 16))
-		return b''.join(data)
-	def WriteNewFileFromMemory(self, rpath, data):
+		if write is False:
+			return b''.join(out)
+		return True	
+	
+	'''
+		This will allocate a file. The file has no name. The return value is the
+		file offset on the storage block. You need to write to the file to give
+		it a name.
+	'''
+	def AllocateFile(self, size):
 		client = self.client
 		cs = self.cs
 		
-		chunks = cs.AllocChunksForSegment(len(data) + len(rpath))
+		chunks = cs.AllocChunksForSegment(size)
 		
-		print('writing new file to memory [%s]' % rpath)
+		if chunks is None:
+			return None
 		
-		# [(offset, size, level), ...]
 		fchunk = chunks.pop()
 		rchunk = fchunk
+		
+		fheader = True
+		
+		rootfileoff = struct.unpack('>Q', client.Read(self.metabase, 8))[0]
+		
+		tlen = 0
+		lchunk = None
+		while True:
+			# write the next link on the previous chunk
+			if lchunk is not None:
+				client.Write(lchunk[0] + hoff, struct.pack('>Q', fchunk[0]))
+		
+			# write chunk header
+			if fheader:
+				print('@@@', size)
+				client.Write(fchunk[0], struct.pack('>QQQQH', rootfileoff, 0, fchunk[1], size, 0))
+				hoff = 8
+				tlen = tlen + (fchunk[1] - (8 * 4 + 2))
+			else:
+				client.Write(fchunk[0], '>QQ', 0, fchunk[1])
+				hoff = 0
+				tlen = tlen + (fchunk[1] - (8 * 2))
+			lchunk = fchunk
+			
+			# exit out no more chunks
+			if len(chunks) < 1:
+				break
+			# get next chunk
+			fchunk = chunks.pop()
+		# do we need one more page?
+		# TODO: this might have to hanle cases where we
+		#       need more than one 4096 or something bigger
+		if tlen < size:
+			assert(tlen < 4096)
+			# try a 4096 byte one
+			fchunk = cs.PullChunk(0)
+			assert(fchunk != None)
+			# link to last chunk
+			client.Write(lchunk[0] + hoff, struct.pack('>Q', fchunk[0]))
+			# make header for this new chunk
+			client.Write(fchunk[0], struct.pack('>QQ', 0, fchunk[1]))
 
-		f = struct.unpack('>Q', client.Read(self.metabase, 8))[0]
-		
-		nlen = len(rpath)
-		
-		# next file, next chunk, tchunksize, namelen
-		
-		firstheader = True
-		
-		doff = 0
-		
-		wdata = rpath + data
-		
-		while fchunk[1] != 0:
-			if len(chunks) > 0:
-				nchunk = chunks.pop()
-			else:
-				nchunk = (0, 0, 0)
-			# write header
-			print('	writing header for chunk:%x nchunk:%x' % (fchunk[0], nchunk[0]))
-			if firstheader:
-				firstheader = False
-				# next file chunk, next chunk in this size, this chunk size, data size, name size
-				client.Write(fchunk[0], struct.pack('>QQQQH', f, nchunk[0], fchunk[1], len(data), len(rpath)))
-				hdrlen = 8 * 4 + 2
-				nextoff = 8
-			else:
-				# next chunk in this file, this chunk size
-				client.Write(fchunk[0], struct.pack('>QQ', nchunk[0], fchunk[1]))
-				hdrlen = 8 * 2
-				nextoff = 0
-				
-			if doff < len(wdata):
-				# write some file data
-				crem = fchunk[1] - hdrlen
-				if crem > len(wdata):
-					crem = len(wdata) - doff
-				print('	writing %s bytes of data out of %s' % (crem, len(wdata)))
-				client.Write(fchunk[0] + hdrlen, wdata[doff:doff + crem])
-				doff = doff + crem
-			# lchunk is used at end if more data remaining
-			lchunk = fchunk	
-			# fchunk is used on next iteration if not (0, 0, 0)
-			fchunk = nchunk
-		# is there still name data or file data left
-		if doff < len(data):
-			printf('	some data left')
-			# allocate one more page
-			need = (len(data) - doff) + 8 * 2
-			assert(need < 4096)
-			chunk = self.PullChunk(0)
-			print('allocated final chunk:%x of size:%x' % (chunk, 4096))
-			# link from last chunk to this chunk
-			client.Write(fchunk[0] + nextoff, struct.pack('>Q', chunk[0]))
-			# write our header
-			client.Write(chunk[0], struct.pack('>QQ', 0, chunk[1]))
-			off = 8 * 2
-			# write remaining data
-			client.Write(chunk[0] + off, data[doff:])
-		
-		print('wrote [%s] to root' % rpath)
+		# link it into the file system now that it is done
 		client.Write(self.metabase, struct.pack('>Q', rchunk[0]))
+			
+		a, b, csize, dlen, nlen = struct.unpack('>QQQQH', client.Read(rchunk[0], 8 * 4 + 2))
+		print('NLEN', nlen)
+			
+		return rchunk[0]

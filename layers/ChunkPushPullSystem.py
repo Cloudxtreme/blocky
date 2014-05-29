@@ -239,7 +239,7 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 		#print('push-chunk level:%s chunk:%x' % (level, chunk))
 		if level == 0:
 			return self.PushBasePage(chunk)
-		boff = struct.unpack('>Q', client.Read(200 + level * 8, 8))[0]
+		boff = struct.unpack('>Q', client.Read(int(200 + level * 8), 8))[0]
 		next, top = struct.unpack('>QH', client.Read(boff, 10))
 		if top == self.bucketmaxslots:
 			# create new bucket from ... a page (base page / base chunk)
