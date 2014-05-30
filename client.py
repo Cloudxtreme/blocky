@@ -64,7 +64,7 @@ class Client(interface.StandardClient):
 		self.cache_dirty = []
 		self.cache_lastread = {}
 		self.cache_lastwrite = {}
-		self.cache_maxpages = 8192
+		self.cache_maxpages = 128
 		
 		self.wholds = []
 		
@@ -130,6 +130,11 @@ class Client(interface.StandardClient):
 					oldtime = ptime
 					oldpage = page
 			# flush out page back to server
+			# TODO: this could be a problem.. if we write it out and delete the cache
+			#       then it does seem possible that a read could occur before the pacet
+			#       containing the page to be written on the server essentially reading
+			#		any old data
+			self.Write(oldpage, self.cache[oldpage])
 			# drop old page
 			#print('commiting and dropping cache page %x' % page)
 			del self.cache[oldpage]
@@ -314,7 +319,7 @@ class Client(interface.StandardClient):
 		
 		return self.Write(offset, data, block = block, hold = True, discard = discard, ticknet = ticknet, wt = wt)
 		
-	def Write(self, offset, data, block = False, hold = False, discard = True, cache = True, wt = True, ticknet = False):
+	def Write(self, offset, data,  block = False, hold = False, discard = True, cache = True, wt = True, ticknet = False):
 		# split the write up if we need too if it is very large
 		if len(data) < 1200:
 			return self.__Write(offset, data, block = block, hold = block, discard = discard, cache = cache, wt = wt, ticknet = ticknet)
@@ -330,6 +335,7 @@ class Client(interface.StandardClient):
 			print('loffset:%s' % loffset)
 			
 			ret = self.__Write(offset + loffset, _data, block = block, hold = block, discard = discard, cache = cache, wt = wt, ticknet = ticknet)
+			
 			rets.append(ret)
 			
 			# update this last for 'offset + loffset' above
@@ -358,9 +364,9 @@ class Client(interface.StandardClient):
 		#print('sent write')
 		
 		# does not make sense to discard and block (will just fil up vexecuted)
-		if discard is False and block is False:
+		if discard is not True and block is False:
 			# discard the write reply when it arrives
-			self.vexecuted[vector] = True
+			self.vexecuted[vector] = discard
 
 		#if discard is False and block is False:
 		#	print('warning')
