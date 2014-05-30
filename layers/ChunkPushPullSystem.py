@@ -244,6 +244,10 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 		client.DoWriteHold()
 		return True
 		
+	def PushChunkBySize(self, sz, chunk):
+		level = (sz / self.base) - 1
+		return self.PushChunk(level, chunk)
+		
 	def PushChunk(self, level, chunk):
 		client = self.client
 		# short-circuit to the specialized function for pages (not chunks)

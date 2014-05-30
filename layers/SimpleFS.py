@@ -22,7 +22,7 @@ class SimpleFS(layers.interface.BasicFS):
 		cur = struct.unpack('>Q', client.Read(self.metabase, 8))[0]
 		while cur != 0:
 			# read file header
-			next, nchunk, tsize, dlen, nlen = struct.unpack('>QQQQH', client.Read(cur, 8 * 4 + 2))
+			next, prev, nchunk, tsize, dlen, nlen = struct.unpack('>QQQQQH', client.Read(cur, 8 * 5 + 2))
 			# next file, next chunk, tchunksize, datalen, namelen
 			# read file name
 			
@@ -55,7 +55,38 @@ class SimpleFS(layers.interface.BasicFS):
 	def GetChangeID(self):
 		raise Exception('Not Implement')
 	def DeleteFile(self, foff):
-		raise Exception('Not Implement')
+		cs = self.cs
+		client = self.client
+		
+		root = struct.unpack('>Q', client.Read(self.metabase, 8))[0]
+		next, prev, nchunk, csize, dlen, nlen = struct.unpack('>QQQQQH', client.Read(foff, 8 * 5 + 2))
+		# set next for our prev
+		if prev != 0:
+			client.Write(prev, struct.pack('>Q', next))
+		# set prev for our next
+		if next != 0:
+			client.Write(next + 8, struct.pack('>Q', prev))
+		# set root if needs to be changed
+		if foff == root:
+			# set to prev if exists or next
+			if prev != 0:
+				client.Write(self.metabase, struct.pack('>Q', prev))
+			else:
+				client.Write(self.metabase, struct.pack('>Q', next))
+		
+		# now free pages used
+		cur = foff
+		while True:
+			# free page
+			cs.PushChunkBySize(csize, cur)
+			print('	pushed %x:%s' % (cur, csize))
+			# get next chunk
+			if nchunk == 0:
+				break
+			cur = nchunk
+			nchunk, csize = struct.unpack('>QQ', client.Read(cur, 8 * 2))
+		# we are done!
+		
 	def __PushChunksInChain(self, chunk):
 		cs = self.cs
 		client = self.client
@@ -75,7 +106,7 @@ class SimpleFS(layers.interface.BasicFS):
 	def TruncateFile(self, foff, newsize):
 		client = self.client
 		cs = self.cs
-		next, nchunk, csize, dlen, nlen = struct.unpack('>QQQQH', client.Read(foff, 8 * 4 + 2))
+		next, prev, nchunk, csize, dlen, nlen = struct.unpack('>QQQQQH', client.Read(foff, 8 * 5 + 2))
 		hoff = 8 * 4 + 2
 		chunk = foff
 		tsize = 0
@@ -123,8 +154,8 @@ class SimpleFS(layers.interface.BasicFS):
 						# master chunk >QQQQH
 						client.Write(_chunk + 8, struct.pack('>QQ', 0, bpsz << level)) 
 					
-					# write the 4th field of the master header to show new size
-					client.Write(foff + 8 * 3, struct.pack('>Q', newsize))
+					# write the 5th field of the master header to show new size
+					client.Write(foff + 8 * 4, struct.pack('>Q', newsize))
 					
 					# exit we are done
 					return True
@@ -165,34 +196,36 @@ class SimpleFS(layers.interface.BasicFS):
 				# if was set to 8 it is now set to 0
 				hoff = 0
 				# now loop will grab next chunk
-			# write the new data size
-			client.Write(foff + 8 * 3, struct.pack('>Q', newsize))
+			# write the new data size (5th field)
+			client.Write(foff + 8 * 4, struct.pack('>Q', newsize))
 		# exit we are done
 		return True
 	
 	def SetNameLength(self, foff, nlen):
 		client = self.client
 		# get old sizes
-		dlen, _nlen = struct.unpack('>QH', client.Read(foff + 8 * 3, 8 + 2))
+		dlen, _nlen = struct.unpack('>QH', client.Read(foff + 8 * 4, 8 + 2))
 		# restore bytes
 		dlen = dlen + _nlen
 		# subtract bytes
 		dlen = dlen - nlen
 		# write new sizes
 		print('dlen:%s nlen:%s' % (dlen, nlen))
-		client.Write(foff + 8 * 3, struct.pack('>QH', dlen, nlen))
+		client.Write(foff + 8 * 4, struct.pack('>QH', dlen, nlen))
 		
 	def CreateFile(self, path, size):
 		if type(path) is str:
 			path = bytes(path, 'utf8')
 		foff = self.AllocateFile(size + len(path))
+		if foff is None:
+			return None
 		self.WriteFile(foff, None, path)
 		self.SetNameLength(foff, len(path))
 		return foff
 		
 	def GetNameLength(self, foff):
 		client = self.client
-		next, nchunk, csize, dlen, nlen = struct.unpack('>QQQQ', client.Read(foff, 8 * 4 + 2))
+		next, prev, nchunk, csize, dlen, nlen = struct.unpack('>QQQQQ', client.Read(foff, 8 * 5 + 2))
 		return nlen
 	
 	def ReadFile(self, foff, offset, length):
@@ -205,7 +238,7 @@ class SimpleFS(layers.interface.BasicFS):
 		client = self.client
 		out = []
 		chunk = foff
-		next, nchunk, csize, dlen, nlen = struct.unpack('>QQQQH', client.Read(foff, 8 * 4 + 2))
+		next, prev, nchunk, csize, dlen, nlen = struct.unpack('>QQQQQH', client.Read(foff, 8 * 5 + 2))
 		foff = 8 * 4 + 2
 		
 		# unless they specify None move them past the name string
@@ -297,7 +330,7 @@ class SimpleFS(layers.interface.BasicFS):
 			# write chunk header
 			if fheader:
 				print('fchunk[0]:%x' % fchunk[0])
-				client.Write(fchunk[0], struct.pack('>QQQQH', rootfileoff, 0, fchunk[1], size, 0))
+				client.Write(fchunk[0], struct.pack('>QQQQQH', rootfileoff, 0, 0, fchunk[1], size, 0))
 				hoff = 8
 				tlen = tlen + (fchunk[1] - (8 * 4 + 2))
 			else:
@@ -328,8 +361,23 @@ class SimpleFS(layers.interface.BasicFS):
 			client.Write(lchunk[0] + hoff, struct.pack('>Q', fchunk[0]))
 			# make header for this new chunk
 			client.Write(fchunk[0], struct.pack('>QQ', 0, fchunk[1]))
-
-		# link it into the file system now that it is done
+		
+		'''
+			the root item should not have a valid prev pointer, but in the
+			event that it does lets try to grab it and basically fix it
+			
+			TODO: write some code to walk backwards and completely fix the
+				  problem if it exists (may be more linked previously)
+		'''
+		# check if root item has a prev pointer
+		_next, _prev = struct.unpack('>QQ', client.Read(rootfileoff, 16))
+		if _prev != 0:
+			# set our prev point to that prev
+			client.Write(rchunk[0] + 8, struct.pack('>Q', _prev))
+		
+		# set current root's prev pointer to newly created file
+		client.Write(rootfileoff + 8, struct.pack('>Q', rchunk[0]))
+		# set root pointer to newly allocated file
 		client.Write(self.metabase, struct.pack('>Q', rchunk[0]))
 		return rchunk[0]
 	
@@ -348,11 +396,14 @@ class SimpleFS(layers.interface.BasicFS):
 		
 		while True:
 			# decide what to do
-			op = random.randint(0, 0)
+			op = random.randint(0, 1)
 			print('op:%s' % op)
 			
+			if len(files) < 1:
+				op = 0
+			
 			# verify all files and content
-			if True:
+			if False:
 				bad = False
 				for file in files:
 					f = file[0]
@@ -371,22 +422,30 @@ class SimpleFS(layers.interface.BasicFS):
 				if bad:
 					raise Exception('file data not correct')
 			
+			# delete file
+			if op == 1:
+				i = random.randint(0, len(files) - 1)
+				file = files[i]
+				print('deleting file %s' % file[2])
+				self.DeleteFile(file[0])
+				continue
 			
 			# make new file
 			if op == 0:
 				# random name
 				name = IDGen.gen(4)
 				# random size (between 10 bytes and a little over 1MB)
-				fsz = random.randint(len(name) + 10, len(name) + 20)
+				fsz = random.randint(len(name) + 10, len(name) + 1000)
 				f = self.CreateFile(name, fsz)
 				
 				print('created:[%s] f:%x' % (name, f))
 				# make sure f is not already used
-				for file in files:
-					if f == file[0]:
-						print('dup:%x' % f)
-						raise Exception('faddr duplicate')
-				print('		created')
+				if False:
+					for file in files:
+						if f == file[0]:
+							print('dup:%x' % f)
+							raise Exception('faddr duplicate')
+					print('		created')
 				if f is not None:
 					afsz = fsz - len(name) - 5
 					data = IDGen.gen(afsz)
@@ -397,28 +456,10 @@ class SimpleFS(layers.interface.BasicFS):
 				else:
 					# we need to delete a file
 					raise Exception('out of memory')
+				continue
+			# end-of-while-loop
 			
 		#cs.TestSegmentAllocationAndFree()
-		
 		list = fs.EnumerateFileList()
-		
-		#fs.TruncateFile(list[0][1], 4096 * 5)
-		
-		fs.EnumerateFileList()
-		
 		fs.TruncateFile(list[0][1], 8192)
-		
-		data = IDGen.gen(8192)
-		
-		fs.WriteFile(list[0][1], 0, data)
-		_data = fs.ReadFile(list[0][1], 0, 16000)
-		
-		print('_data-len:%s' % len(_data))
-		
-		if _data != data:
-			print('OOPS')
-			exit()
-		
-		
-		list = fs.EnumerateFileList()
-		print(list)
+		# end-of-function
