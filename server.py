@@ -562,7 +562,7 @@ def server(lip, lport):
 				if type == PktCodeClient.WriteHold:
 					offset = struct.unpack_from('>Q', data)[0]
 					data = data[8:]
-					if offset + len(data) >= block['size']:
+					if offset + len(data) > block['size']:
 						data = struct.pack('>BQ', PktCodeServer.OperationFailure, vector)
 						data, _tmp = BuildEncryptedMessage(link, data)
 						link['outgoing'][_tmp] = (_tmp, 0, data)
@@ -619,6 +619,11 @@ def server(lip, lport):
 					
 				if type == PktCodeClient.Copy:
 					dst, src, length = struct.unpack_from('>QQQ', data)
+					if dst + length > block['size'] or src + lenth > block['size']:
+						data = struct.pack('>BQ', PktCodeServer.OperationFailure, vector)
+						data, _tmp = BuildEncryptedMessage(link, data)
+						link['outgoing'][_tmp] = (_tmp, 0, data)
+						continue			
 					mm.move(dst, src, length)
 					data = struct.pack('>BQQH', PktCodeServer.WriteSuccess, vector, 0, 0)
 					data, _tmp = BuildEncryptedMessage(link, data)
@@ -628,7 +633,7 @@ def server(lip, lport):
 				if type == PktCodeClient.Write:
 					offset = struct.unpack_from('>Q', data)[0]
 					data = data[8:]
-					if offset + len(data) >= block['size']:
+					if offset + len(data) > block['size']:
 						data = struct.pack('>BQ', PktCodeServer.OperationFailure, vector)
 						data, _tmp = BuildEncryptedMessage(link, data)
 						link['outgoing'][_tmp] = (_tmp, 0, data)
@@ -690,7 +695,7 @@ def server(lip, lport):
 					continue
 				if type == PktCodeClient.Read:
 					offset, length = struct.unpack_from('>QH', data)
-					if offset + length >= block['size']:
+					if offset + length > block['size']:
 						data = struct.pack('>BQ', PktCodeServer.OperationFailure, vector)
 						data, _tmp = BuildEncryptedMessage(link, data)
 						link['outgoing'][_tmp] = (_tmp, 0, data)
