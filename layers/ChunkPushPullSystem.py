@@ -175,9 +175,9 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 		return
 		
 	
-	def AllocChunksForSegment(self, seglength):
+	def AllocChunksForSegment(self, seglength, initialsub = 0, repeatsub = 0):
 		chunks = []
-		if self.__AllocChunksForSegment(seglength, self.levels - 1, chunks) is False:
+		if self.__AllocChunksForSegment(seglength, self.levels - 1, chunks, initialsub = initialsub, repeatsub = repeatsub) is False:
 			# push all the chunks we did get back..
 			for chunk in chunks:
 				# push chunk back into specified level
@@ -186,7 +186,7 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 		# we should have enough chunks for the segment
 		return chunks
 		
-	def __AllocChunksForSegment(self, seglength, level, chunks):
+	def __AllocChunksForSegment(self, seglength, level, chunks, initialsub, repeatsub):
 		if level < 0:
 			#print('level bottomed out')
 			return False
@@ -197,7 +197,7 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 		if lchunksz > seglength and level > 0:
 			# too large, so try a lower level
 			#print('level:%s is too large (lchunksz:%x seglength:%x) so going lower' % (level, lchunksz, seglength))
-			return self.__AllocChunksForSegment(seglength, level - 1, chunks)
+			return self.__AllocChunksForSegment(seglength, level - 1, chunks, initialsub, repeatsub)
 		# how many can fit into it?
 		cnt = int(seglength / lchunksz)
 		if level == 0 and (cnt * lchunksz < seglength):
@@ -210,14 +210,17 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 			if chunk is None:
 				#print('none left in level:%s so going lower' % level)
 				# no chunks left, try lower level
-				return self.__AllocChunksForSegment(seglength, level - 1, chunks)
+				return self.__AllocChunksForSegment(seglength, level - 1, chunks, initialsub, repeatsub)
 			print('used chunk:%x from level:%s' % (chunk, level))
+			if len(chunks) < 1:
+				seglength = seglength - (lchunksz + initialsub)
+			else:
+				seglength = seglength - (lchunksz + repeatsub)
 			chunks.append((chunk, lchunksz, level))
-			seglength = seglength - lchunksz
 			if seglength < 1:
 				return True
 		# if we still have some left, try the next lower level
-		return self.__AllocChunksForSegment(seglength, level - 1, chunks)
+		return self.__AllocChunksForSegment(seglength, level - 1, chunks, initialsub, repeatsub)
 	
 	def PushBasePages(self, pages):
 		for page in pages:
@@ -234,6 +237,8 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 		next, top = struct.unpack('>QH', client.Read(boff, 10))
 		if top == self.bucketmaxslots:
 			# create new bucket from one of the pages
+			printf('creating new bucket for base page buckets')
+			time.sleep(2)
 			client.WriteHold(page, struct.pack('>QH', boff, 0))
 			client.WriteHold(200 + level * 8, struct.pack('>Q', page))
 			client.DoWriteHold()
@@ -296,15 +301,14 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 		
 	def __PullChunk(self, level, slackpages):
 		client = self.client
-		#print('pulling chunk from level:%s' % level)
-		#print('pulling chunk from level:%s' % level)
+		print('pulling chunk from level:%s' % level)
 		boff = struct.unpack('>Q', client.Read(200 + level * 8, 8))[0]
 		next, top = struct.unpack('>QH', client.Read(boff, 10))
 		if top == 0:
 			#print('		bucket for level empty')
 			# drop this page and get next
 			if next == 0:
-				#print('			no more buckets')
+				print('			no more buckets')
 				# if we have to go any higher we are out of memory
 				if level + 1 >= self.levels:
 					return None
@@ -316,6 +320,8 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 			client.Write(200 + level * 8, struct.pack('>Q', next))
 			# store this unused base sized page
 			slackpages.append(boff)
+			print('		next:%x top:%s' % (next, top))
+			print('		stored slack page:%x' % boff)
 			# try again..
 			return self.__PullChunk(level, slackpages)
 		chunk = struct.unpack('>Q', client.Read(boff + 10 + (top - 1) * 8, 8))[0]
