@@ -186,8 +186,8 @@ class SimpleFS(layers.interface.BasicFS):
 		if type(path) is str:
 			path = bytes(path, 'utf8')
 		foff = self.AllocateFile(size + len(path))
-		#self.WriteFile(foff, None, path)
-		#self.SetNameLength(foff, len(path))
+		self.WriteFile(foff, None, path)
+		self.SetNameLength(foff, len(path))
 		return foff
 		
 	def GetNameLength(self, foff):
@@ -344,7 +344,7 @@ class SimpleFS(layers.interface.BasicFS):
 
 		files = []
 		
-		random.seed(10)
+		random.seed(93820192)
 		
 		while True:
 			# decide what to do
@@ -361,7 +361,7 @@ class SimpleFS(layers.interface.BasicFS):
 					fdata = file[3]
 					#print('verifying:[%s] fsz:%s' % (fname, fsz))
 					_data = self.ReadFile(f, 0, fsz)
-					if False and _data != fdata:
+					if True and _data != fdata:
 						print('OUCH')
 						print('fsz:%s' % fsz)
 						print('f:%x' % f)
@@ -389,10 +389,9 @@ class SimpleFS(layers.interface.BasicFS):
 				print('		created')
 				if f is not None:
 					afsz = fsz - len(name) - 5
-					afsz = 1
 					data = IDGen.gen(afsz)
 					print('		writing:[%s]' % data)
-					#self.WriteFile(f, 0, data)
+					self.WriteFile(f, 0, data)
 					files.append((f, afsz, name, data))
 					print('		done writing')
 				else:

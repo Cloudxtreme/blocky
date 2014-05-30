@@ -76,13 +76,6 @@ class Client(interface.StandardClient):
 		# set the defaults
 		self.SetCommunicationExceptionTime(60 * 15)
 		self.SetRelinkTimeout(60 * 5)
-		
-	'''
-		If blocking:
-			Will return True for success, or raise Exception.
-		If non-blocking:
-			Will return None
-	'''
 	
 	def GetWriteHoldCount(self):
 		self.DoBlockingLinkSetup()
