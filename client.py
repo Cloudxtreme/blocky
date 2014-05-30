@@ -11,6 +11,7 @@ import time
 import math
 import layers.interface as interface
 import traceback
+import inspect
 from layers.SimpleFS import SimpleFS
 from layers.ChunkPushPullSystem import ChunkPushPullSystem
 
@@ -68,8 +69,7 @@ class Client(interface.StandardClient):
 		
 		self.wholds = []
 		
-		self.x = 0				# debugging variable (safe to remove)
-		self.catchwrite = None
+		self.wdbg = []
 		
 		self.vexecwarnlimit = 1024
 		
@@ -193,10 +193,6 @@ class Client(interface.StandardClient):
 	def CacheWrite(self, offset, data, wt = False):
 		cache = self.cache
 		
-		if self.catchwrite is not None:
-			if offset >= self.catchwrite[0] and offset < self.catchwrite[1]:
-				raise Exception('caught write')
-		
 		page = offset & ~0x3ff
 		loffset = offset - page
 		dleft = len(data)
@@ -311,8 +307,31 @@ class Client(interface.StandardClient):
 		self.wholds.append((offset, data))
 		
 		return self.Write(offset, data, block = block, hold = True, discard = discard, ticknet = ticknet, wt = wt)
-		
+	
+	if __debug__:
+		def DebugPrintWhoWrote(self, offset, length):
+			print('	DEBUG-WHO-WROTE		offset:%x length:%x' % (offset, length))
+			for dbg in self.wdbg:
+				s = dbg[2]
+				e = s + dbg[3]
+				_s = offset
+				_e = offset + length
+				if	(_s >= s and _s <= e) or (_e >= s and _e <= e) or (s >= _s and s <= _e) or (e >= _s and e <= _e):
+					print('		f:%s l:%s offset:%x length:%x' % (dbg[0], dbg[1], s, length))
+			return True
+					
 	def Write(self, offset, data,  block = False, hold = False, discard = True, cache = True, wt = True, ticknet = False):
+		# track who called us and the write data
+		#self.wdbg
+		#frm = inspect.stack()[1]
+		#callername = inspect.getmodule(frm[0])
+		#sourcefile = inspect.getsourcefile(frm[0])
+		##sourceline = inspect.getsourcelines(frm[0])[1]
+		#sourceline = frm[0].f_lineno
+		#self.wdbg.append((sourcefile, sourceline, offset, len(data)))		
+		#print(sourcefile, sourceline)
+		#exit()
+		
 		# split the write up if we need too if it is very large
 		if len(data) < 1200:
 			return self.__Write(offset, data, block = block, hold = block, discard = discard, cache = cache, wt = wt, ticknet = ticknet)
