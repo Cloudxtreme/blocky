@@ -17,6 +17,8 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 	def __init__(self, client, load = True):
 		self.client = client
 
+		self.client.catchwrite = None
+		
 		if load:
 			Load()
 		else:
@@ -158,8 +160,10 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 						_s = _chunk[0]
 						e = (chunk[0] + chunk[1]) - 1
 						_e = (_chunk[0] + _chunk[1]) - 1
-						if (s >= _s and e <= _e) or (_s >= s and _e <= e) or \
-						   (s >= _s and s <= _e) or (e >= _s and e <= _e):
+						if (s >= _s and s <= _e) or \
+						   (e >= _s and e <= _e) or \
+						   (_s >= s and _s <= e) or \
+						   (_e >= s and _e <= e):
 							print('OVERLAP')
 							print('start:%x end:%x length:%x level:%s' % (s, e, chunk[1], chunk[2]))
 							print('start:%x end:%x length:%x level:%s' % (_s, _e, _chunk[1], _chunk[2]))
@@ -207,7 +211,7 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 				#print('none left in level:%s so going lower' % level)
 				# no chunks left, try lower level
 				return self.__AllocChunksForSegment(seglength, level - 1, chunks)
-			#print('used chunk on level:%s' % level)
+			print('used chunk:%x from level:%s' % (chunk, level))
 			chunks.append((chunk, lchunksz, level))
 			seglength = seglength - lchunksz
 			if seglength < 1:
@@ -222,6 +226,8 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 	
 	def PushBasePage(self, page):
 		client = self.client
+		
+		print('	push base page:%x' % page)
 		
 		level = 0
 		boff = struct.unpack('>Q', client.Read(200 + level * 8, 8))[0]
@@ -264,7 +270,7 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 
 		
 	def FillLevelOnce(self, level):
-		#print('filling in level:%s' % level)
+		print('filling in level:%s' % level)
 		if level + 1 >= self.levels:
 			return False
 		chunk = self.PullChunk(level + 1)
@@ -309,8 +315,16 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 			# try again..
 			return self.__PullChunk(level, slackpages)
 		chunk = struct.unpack('>Q', client.Read(boff + 10 + (top - 1) * 8, 8))[0]
+		
+		if chunk == 0x315b000:
+			self.catchwrite = (boff, boff + 10)
+		
+		print('pulled chunk:%x from level:%x top:%s' % (chunk, level, top))
 		#print('		chunk:%s' % chunk)
 		client.Write(boff, struct.pack('>QH', next, top - 1))
+		next, top = struct.unpack('>QH', client.Read(boff, 10))
+		print('	double check top:%s' % top)
+		
 		#print('returning chunk:%x level:%s top:%s' % (chunk, level, top - 1))
 		return chunk
 		

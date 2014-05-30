@@ -694,6 +694,7 @@ def server(lip, lport):
 						data = struct.pack('>BQ', PktCodeServer.OperationFailure, vector)
 						data, _tmp = BuildEncryptedMessage(link, data)
 						link['outgoing'][_tmp] = (_tmp, 0, data)
+						print('read past end of block')
 						continue
 					#fd.seek(offset)
 					mm.seek(offset)

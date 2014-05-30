@@ -64,11 +64,12 @@ class Client(interface.StandardClient):
 		self.cache_dirty = []
 		self.cache_lastread = {}
 		self.cache_lastwrite = {}
-		self.cache_maxpages = 128
+		self.cache_maxpages = 8192
 		
 		self.wholds = []
 		
 		self.x = 0				# debugging variable (safe to remove)
+		self.catchwrite = None
 		
 		self.vexecwarnlimit = 1024
 		
@@ -130,7 +131,7 @@ class Client(interface.StandardClient):
 					oldpage = page
 			# flush out page back to server
 			# drop old page
-			print('commiting and dropping cache page %x' % page)
+			#print('commiting and dropping cache page %x' % page)
 			del self.cache[oldpage]
 			if oldpage in self.cache_lastread:
 				del self.cache_lastread[oldpage]
@@ -138,6 +139,9 @@ class Client(interface.StandardClient):
 				del self.cache_lastwrite[oldpage]
 		
 	def CacheRead(self, offset, length):
+		assert(length > 0)
+		assert(offset > -1)
+	
 		cache = self.cache
 		# align to page boundary
 		page = offset & ~0x3ff
@@ -161,8 +165,9 @@ class Client(interface.StandardClient):
 				else:
 					psz = 1024
 				cache[page] = self.Read(page, psz, block = True, cache = False)
-				assert(len(cache[page]) == 1024)
-				print('[read] cache page:%x length:%x' % (page, len(cache[page])))
+				#print('loading page:%x' % page)
+				assert(len(cache[page]) == psz)
+				#print('[read] cache page:%x length:%x' % (page, len(cache[page])))
 			self.cache_lastread[page] = ct
 			# either a partial read or a full read
 			#print('		dleft:%x loffset:%x' % (dleft, loffset))
@@ -175,6 +180,7 @@ class Client(interface.StandardClient):
 				ava = dleft
 			dleft = dleft - ava
 			
+			#print('read page:%x loffset:%x' % (page, loffset))
 			data = cache[page][loffset:loffset + ava]
 			out.append(data)
 			
@@ -183,12 +189,15 @@ class Client(interface.StandardClient):
 			page = offset & ~0x3ff
 		
 		out = b''.join(out)
-		print('len(out):%s length:%s' % (len(out), length))
 		assert(len(out) == length)
 		return out
 	
 	def CacheWrite(self, offset, data, wt = False):
 		cache = self.cache
+		
+		if self.catchwrite is not None:
+			if offset >= self.catchwrite[0] and offset < self.catchwrite[1]:
+				raise Exception('caught write')
 		
 		page = offset & ~0x3ff
 		loffset = offset - page
@@ -200,6 +209,7 @@ class Client(interface.StandardClient):
 			#print('[write] cache loffset:%x page:%x dleft:%x' % (loffset, page, dleft))
 			if page not in cache:
 				self.CacheTick()
+				#print('loading page:%x' % page)
 				cache[page] = self.Read(page, 1024, block = True, cache = False)
 				#print('[write] cached page:%x' % page)
 			if wt is False:
@@ -220,10 +230,14 @@ class Client(interface.StandardClient):
 			
 			# this looks ugly but how else can i do it quickly...?
 			cpage = cache[page]
+			
 			doff = len(data) - dleft
+			
 			towrite = data[doff:doff + lsize]
 			
+			#print('write page:%x loffset:%x data:%s' % (page, loffset, towrite))
 			cache[page] = cpage[0:loffset] + towrite + cpage[loffset + lsize:]
+			
 			assert(len(cache[page]) == 1024)
 			
 			# subtract what we wrote
@@ -240,7 +254,6 @@ class Client(interface.StandardClient):
 		ret = self.HandlePackets(getvector = vector)
 		if ret is None:
 			raise OperationException()
-		
 		return ret
 
 	def DoWriteHold(self, block = False, discard = True, verify = False, ticknet = False):
@@ -308,15 +321,19 @@ class Client(interface.StandardClient):
 		loffset = 0
 		rets = []
 		print('doing multiple write')
-		while offset < len(data):
+		while loffset < len(data):
 			lsz = 1200
-			if lsz > len(data) - offset:
-				lsz = len(data) - offset
-			_data = data[offset:offset + 1200]
-			loffset = loffset + 1200
+			if lsz > len(data) - loffset:
+				lsz = len(data) - loffset
+			_data = data[loffset:loffset + lsz]
+			
 			print('loffset:%s' % loffset)
+			
 			ret = self.__Write(offset + loffset, _data, block = block, hold = block, discard = discard, cache = cache, wt = wt, ticknet = ticknet)
 			rets.append(ret)
+			
+			# update this last for 'offset + loffset' above
+			loffset = loffset + lsz
 		return rets
 	
 	def __Write(self, offset, data, block = False, hold = False, discard = True, cache = True, wt = True, ticknet = False):
@@ -838,23 +855,55 @@ class Client(interface.StandardClient):
 		needs to be run to verify that the code still works correctly.
 	'''
 	def UnitTestCache(self):
+		fd = open('tmp', 'r+b')
 		bsz = self.GetBlockSize()
+		fd.truncate(bsz)
+		writes = []
+		
+		random.seed(340)
+		
+		'''
+		data = IDGen.gen(1200)
+		self.Write(0, data)
+		_data = self.Read(0, 1200)
+		if data != _data:
+			print(data[0:10])
+			print(_data[0:10])
+			print('WRONG')
+		exit()
+		'''
+		
 		while True:
+			for write in writes:
+				off = write[0]
+				sz = write[1]
+				_data = self.Read(off, sz)
+				fd.seek(off)
+				data = fd.read(sz)
+				if _data != data:
+					print(_data)
+					print('------------------')
+					print(data)
+					raise Exception('data does not match')
+				else:
+					print('match off:%s sz:%s' % (off, sz))
+		
 			off = random.randint(1, bsz - 1)
-			sz = random.randint(1, 1024 * 2)
+			sz = random.randint(1, 1024 * 4)
 			if sz > bsz - off:
 				sz = bsz - off 
 			
+			# generate random byte sequence
 			data = IDGen.gen(sz)
 			
 			print('writing offset:%x len:%x' % (off, sz))
+			# write to our file
+			fd.seek(off)
+			fd.write(data)
+			# write to the virtual block
 			self.Write(off, data)
-			
-			_data = self.Read(off, sz)
-			if data != _data:
-				print('NO GOOD')
-				return False
-			print('GOOD')
+			# store the write
+			writes.append((off, len(data)))
 		# execution will never reach here
 		return True
 		
