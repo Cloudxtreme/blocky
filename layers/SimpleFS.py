@@ -1,5 +1,7 @@
 import layers.interface
 import struct
+import random
+from misc import *
 
 class SimpleFS(layers.interface.BasicFS):
 	def __init__(self, cs):
@@ -154,10 +156,10 @@ class SimpleFS(layers.interface.BasicFS):
 				# just write the address of the next chunk
 				# hoff - adjusts for if this is the master chunk
 				client.Write(_chunk[0] + hoff, struct.pack('>Q', chunk[0]))
-				print('writeA chunk:%x --> next:%x size:%x' % (_chunk[0], chunk[0], _chunk[1]))
+				#print('writeA chunk:%x --> next:%x size:%x' % (_chunk[0], chunk[0], _chunk[1]))
 				# write header for new chunk
 				client.Write(chunk[0], struct.pack('>QQ', 0, chunk[1]))
-				print('writeB chunk:%x --> next:0 csize:%x' % (chunk[0], chunk[1]))
+				#print('writeB chunk:%x --> next:0 csize:%x' % (chunk[0], chunk[1]))
 				# set last chunk to this chunk
 				_chunk = chunk
 				# if was set to 8 it is now set to 0
@@ -170,7 +172,15 @@ class SimpleFS(layers.interface.BasicFS):
 	
 	def SetNameLength(self, foff, nlen):
 		client = self.client
-		client.Write(foff + 8 * 4, struct.pack('>H', nlen))
+		# get old sizes
+		dlen, _nlen = struct.unpack('>QH', client.Read(foff + 8 * 3, 8 + 2))
+		# restore bytes
+		dlen = dlen + _nlen
+		# subtract bytes
+		dlen = dlen - nlen
+		# write new sizes
+		print('dlen:%s nlen:%s' % (dlen, nlen))
+		client.Write(foff + 8 * 3, struct.pack('>QH', dlen, nlen))
 		
 	def CreateFile(self, path, size):
 		if type(path) is str:
@@ -209,27 +219,37 @@ class SimpleFS(layers.interface.BasicFS):
 		else:
 			dlen = length
 		boff = 0
-		while dlen > 0:
-			# figure out the most we can read from this chunk
-			ava = csize - foff
-			if ava > dlen:
-				ava = dlen
-			# are we past or at our offset
-			if boff >= offset:
+		doffset = 0
+		while True:
+			# are we current on a chunk where our offset begins
+			if boff + csize >= offset:
+				# we our offset from base of chunk
 				aoff = offset - boff
+				
+				# the most we can read or write on this chunk
+				ava = csize - aoff - foff
+				if ava > dlen:
+					# if its more than we need then adjust
+					ava = dlen
+				
 				# yes, let us read what we can or need
 				if write is False:
 					out.append(client.Read(chunk + foff + aoff, ava))
 				else:
-					client.Write(chunk + foff + aoff, data[offset:offset + ava])
+					print('writing... data-len:%s' % ava)
+					client.Write(chunk + foff + aoff, data[doffset:doffset + ava])
+					doffset = doffset + ava
+					print('offset:%s ava:%s' % (offset, ava))
 				dlen = dlen - ava
 				# increment offset further
 				offset = offset + ava
 			
-			data = client.Read(chunk + foff, ava)
-			dlen = dlen - ava
-		
-			out.append(data)
+			if dlen < 1:
+				break
+			
+			#data = client.Read(chunk + foff, ava)
+			#dlen = dlen - ava
+			#out.append(data)
 		
 			# track our base offset (minus the header)
 			boff = boff + (csize - foff)
@@ -244,7 +264,7 @@ class SimpleFS(layers.interface.BasicFS):
 			nchunk, csize = struct.unpack('>QQ', client.Read(chunk, 16))
 		if write is False:
 			return b''.join(out)
-		return True	
+		return dlen
 	
 	'''
 		This will allocate a file. The file has no name. The return value is the
@@ -276,7 +296,7 @@ class SimpleFS(layers.interface.BasicFS):
 		
 			# write chunk header
 			if fheader:
-				print('@@@', size)
+				print('fchunk[0]:%x' % fchunk[0])
 				client.Write(fchunk[0], struct.pack('>QQQQH', rootfileoff, 0, fchunk[1], size, 0))
 				hoff = 8
 				tlen = tlen + (fchunk[1] - (8 * 4 + 2))
@@ -292,13 +312,18 @@ class SimpleFS(layers.interface.BasicFS):
 			# get next chunk
 			fchunk = chunks.pop()
 		# do we need one more page?
-		# TODO: this might have to hanle cases where we
+		# TODO: this might have to handle cases where we
 		#       need more than one 4096 or something bigger
 		if tlen < size:
 			assert(tlen < 4096)
 			# try a 4096 byte one
 			fchunk = cs.PullChunk(0)
-			assert(fchunk != None)
+			if fchunk is None:
+				# push all other chunks back onto stacks
+				for chunk in chunks:
+					# push chunk back into free chunk buckets
+					cs.PushChunk(chunk[2], chunk[0])
+				return None
 			# link to last chunk
 			client.Write(lchunk[0] + hoff, struct.pack('>Q', fchunk[0]))
 			# make header for this new chunk
@@ -306,8 +331,95 @@ class SimpleFS(layers.interface.BasicFS):
 
 		# link it into the file system now that it is done
 		client.Write(self.metabase, struct.pack('>Q', rchunk[0]))
-			
-		a, b, csize, dlen, nlen = struct.unpack('>QQQQH', client.Read(rchunk[0], 8 * 4 + 2))
-		print('NLEN', nlen)
-			
 		return rchunk[0]
+	
+	def UnitTest(self):
+		client = self.client
+		cs = self.cs
+	
+		self.Format()
+		
+		client.SetCommunicationExceptionTime(45)
+		client.SetRelinkTimeout(15)
+
+		files = []
+		
+		random.seed(10)
+		
+		while True:
+			# decide what to do
+			op = random.randint(0, 0)
+			print('op:%s' % op)
+			
+			# verify all files and content
+			if True:
+				bad = False
+				for file in files:
+					f = file[0]
+					fsz = file[1]
+					fname = file[2]
+					fdata = file[3]
+					#print('verifying:[%s] fsz:%s' % (fname, fsz))
+					_data = self.ReadFile(f, 0, fsz)
+					if False and _data != fdata:
+						print('OUCH')
+						print('fsz:%s' % fsz)
+						print('f:%x' % f)
+						print(len(fdata), fdata)
+						print(len(_data), _data)	
+						bad = True
+				if bad:
+					raise Exception('file data not correct')
+			
+			
+			# make new file
+			if op == 0:
+				# random name
+				name = IDGen.gen(4)
+				# random size (between 10 bytes and a little over 1MB)
+				fsz = random.randint(len(name) + 10, len(name) + 20)
+				f = self.CreateFile(name, fsz)
+				
+				print('created:[%s] f:%x' % (name, f))
+				# make sure f is not already used
+				for file in files:
+					if f == file[0]:
+						print('dup:%x' % f)
+						raise Exception('faddr duplicate')
+				print('		created')
+				if f is not None:
+					afsz = fsz - len(name) - 5
+					afsz = 1
+					data = IDGen.gen(afsz)
+					print('		writing:[%s]' % data)
+					#self.WriteFile(f, 0, data)
+					files.append((f, afsz, name, data))
+					print('		done writing')
+				else:
+					# we need to delete a file
+					raise Exception('out of memory')
+			
+		#cs.TestSegmentAllocationAndFree()
+		
+		list = fs.EnumerateFileList()
+		
+		#fs.TruncateFile(list[0][1], 4096 * 5)
+		
+		fs.EnumerateFileList()
+		
+		fs.TruncateFile(list[0][1], 8192)
+		
+		data = IDGen.gen(8192)
+		
+		fs.WriteFile(list[0][1], 0, data)
+		_data = fs.ReadFile(list[0][1], 0, 16000)
+		
+		print('_data-len:%s' % len(_data))
+		
+		if _data != data:
+			print('OOPS')
+			exit()
+		
+		
+		list = fs.EnumerateFileList()
+		print(list)
