@@ -225,10 +225,28 @@ def server(lip, lport):
 						# drop the link
 						#del links[addr][uid]
 						_toremove.append((addr, uid))
+			# i do all the removal work outside of the
+			# iteration because it can throw an exception
+			# if i modify the list/dict while iterating
+			# over it
 			for e in _toremove:
-				del links[e[0]][e[1]]
+				link = links[e[0]][e[1]]
+				# execute unlocks
+				block = link['block']
+				if block is not None:
+					mm = block['mm']
+					print('unlocking locks for link')
+					for lock in link['locks']:
+						mm.seek(lock)
+						if struct.unpack('>Q', mm.read(8)) == struct.pack('>Q', link['ulid']):
+							mm.seek(lock)
+							mm.write(struct.pack('>Q', 0))
+				uidgen.urem(e[1])				# free that id to be used again
+				del links[e[0]][e[1]]			# remove from links
+				# also remove addr entry if empty
 				if len(links[e[0]]) < 1:
 					del links[e[0]]
+				# report the dropping of the link
 				print('dropping link %s:%s' % (e[0], e[1]))
 	
 		# --------------- UPDATED BLOCKS ----------------
@@ -350,6 +368,7 @@ def server(lip, lport):
 					continue
 				# generate unique link ID
 				uid = uidgen.ugen()
+				
 				links[addr][uid] = {
 					'crypter':		SymCrypt(data),
 					'addr':			addr,
@@ -727,6 +746,64 @@ def server(lip, lport):
 					data, _tmp = BuildEncryptedMessage(link, data)
 					link['outgoing'][_tmp] = (_tmp, 0, data)
 					continue
+					
+				if type == PktCodeClient.BlockUnlock:
+					offset = struct.unpack_from('>Q', data)
+					
+					# remove the lock specified
+					if offset in link['locks']:
+						# unlock the lock
+						mm.seek(offset)
+						mm.write(struct.pack('>I', 0))
+						link['locks'].remove(offset)
+					
+					data = struct.pack('>BQQB', PktCodeServer.UnlockSuccess, vector, offset, force)
+					data, _tmp = BuildEncryptedMessage(link, data)[0]
+					link['outgoing'][_tmp] = (_tmp, 0, data)
+					continue
+					
+				if type == PktCodeClient.BlockLock:
+					offset, value = struct.unpack_from('>QI', data)
+					if offset >= block['size']:
+						data = struct.pack('>BQ', PktCodeServer.OperationFailure, vector)
+						data, _tmp = BuildEncryptedMessage(link, data)
+						link['outgoing'][_tmp] = (_tmp, 0, data)
+						continue
+
+					if value == 0:
+						value = lid
+					else:
+						value = struct.pack('>I', value)
+					
+					mm.seek(offset)
+					oldval = mm.read(4)
+					
+					# if we already own the lock just reply success
+					if oldval == lid
+						data = struct.pack('>B', PktCodeServer.BlockLockSuccess)
+						data, _tmp = BuildEncryptedMessage(link, data)
+						link['outgoing'][_tmp] = (_tmp, 0, data)
+						continue
+						
+					# if nobody owns the lock then lock it
+					if oldval == b'\x00\x00\x00\x00':
+						# take lock
+						mm.seek(offset)
+						mm.write(value)
+						# create automatic unlock entry
+						link['locks'].append(offset)
+						# send reply packet
+						data = struct.pack('>B', PktCodeServer.BlockLockSuccess)
+						data, _tmp = BuildEncryptedMessage(link, data)
+						link['outgoing'][_tmp] = (_tmp, 0, data)
+						continue
+						
+					# somebody else owned the lock
+					data = struct.pack('>B', PktCodeServer.BlockLockFailed)
+					data, _tmp = BuildEncryptedMessage(link, data)
+					link['outgoing'][_tmp] = (_tmp, 0, data)					
+					continue
+					
 				if type == PktCodeClient.Exchange8:
 					offset, newvalue = struct.unpack_from('>QB', data)
 					if offset >= block['size']:
@@ -739,45 +816,16 @@ def server(lip, lport):
 					#fd.seek(offset)
 					#fd.write(newvalue)
 					mm.seek(offset)
-					oldval = mm.red(1)
+					oldval = mm.read(1)
 					mm.seek(offset)
 					mm.write(newvalue)
 					data = struct.pack('>BQQB', PktCodeClient.Exchange8Success, vector, offset, oldval)
 					data, _tmp = BuildEncryptedMessage(link, data)
 					link['outgoing'][_tmp] = (_tmp, 0, data)
 					continue
-				if type == PktCodeClient.BlockLock:
-					offset = struct.unpack_from('>Q', data)
-					data = data[16:]
-					if offset + length >= block['size'] or len(link['locks']) > 20:
-						data = struct.pack('>BQ', PktCodeServer.OperationFailure, vector)
-						data, _tmp = BuildEncryptedMessage(link, data)
-						link['outgoing'][_tmp] = (_tmp, 0, data)
-						continue
-					
-					link['locks'].append((offset, data))
-					
-					data = struct.pack('>BQQQ', PktCodeServer.LockSuccess, vector, offset, length)
-					data, _tmp = BuildEncryptedMessage(link, data)
-					link['outgoing'][_tmp] = (_tmp, 0, data)
-					continue
 				if type == PktCodeClient.BlockSize:
 					data = struct.pack('>BQQ', PktCodeServer.BlockSizeReply, vector, block['size'])
 					data, _tmp = BuildEncryptedMessage(link, data)
-					link['outgoing'][_tmp] = (_tmp, 0, data)
-					continue
-				if type == PktCodeClient.BlockUnlock:
-					offset = struct.unpack_from('>Q', data)
-					
-					# remove the lock specified
-					_locks = []
-					for lock in link['locks']:
-						if lock[0] != offset:
-							_locks.append(lock)
-					link['locks'] = _locks
-					
-					data = struct.pack('>BQQB', PktCodeServer.UnlockSuccess, vector, offset, force)
-					data, _tmp = BuildEncryptedMessage(link, data)[0]
 					link['outgoing'][_tmp] = (_tmp, 0, data)
 					continue
 			print('[', end='')

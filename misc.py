@@ -133,6 +133,8 @@ class PktCodeServer:
 	BlockSizeReply		= 16
 	GetWriteHoldCount 	= 17
 	FlushWriteHold		= 18
+	BlockLockFailed		= 19
+	BlockLockSuccess	= 20
 	
 class IDGen:
 	def __init__(self, size):
@@ -148,6 +150,10 @@ class IDGen:
 			o.append(random.randint(0, 255))
 			x = x + 1
 		return bytes(o)
+	# TODO: add method to remove uid from self.gened once link has been dropped
+	def urem(self, uid):
+		if uid in self.gened:
+			del self.gened[uid]
 	'''
 		Generates a unique (not used before) ID
 	'''

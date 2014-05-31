@@ -477,14 +477,14 @@ class Client(interface.StandardClient):
 		ret = self.HandlePackets(getvector = vector)
 		if block and ret is None:
 			raise OperationException()
-		return ret
+		return ret	
 		
-	def Lock(self, offset, data, block = True):
+	def Exchange8(self, offset, newval):
 		self.DoBlockingLinkSetup()
 		
-		_data = struct.pack('>BQ', PktCodeClient.BlockLock, offset) + data
+		_data = struct.pack('>BQ', PktCodeClient.Exchange8, offset) + data
 		data, vector = BuildEncryptedMessage(self.link, _data)
-		self.outgoing[vector] = (vector, 0, data, self.cryper, _data)
+		self.outgoing[vector] = (vector, 0, data, self.crypter, _data)
 		
 		if block is False:
 			vector = None
@@ -493,7 +493,21 @@ class Client(interface.StandardClient):
 			raise OperationException()
 		return ret
 		
-	def Unlock(self, offset, block = True):
+	def BlockLock(self, offset, value = 0, block = True):
+		self.DoBlockingLinkSetup()
+		
+		_data = struct.pack('>BQI', PktCodeClient.BlockLock, offset, value)
+		data, vector = BuildEncryptedMessage(self.link, _data)
+		self.outgoing[vector] = (vector, 0, data, self.crypter, _data)
+		
+		if block is False:
+			vector = None
+		ret = self.HandlePackets(getvector = vector)
+		if block and ret is False:
+			raise OperationException()
+		return ret
+		
+	def BlockUnlock(self, offset, block = True):
 		self.DoBlockingLinkSetup()
 	
 		_data = struct.pack('>BQ', PktCodeClient.BlockUnlock, offset)
@@ -955,7 +969,6 @@ def doClient(rhost, bid):
 	#exit()
 	
 	fs = SimpleFS(cs)
-
 	fs.UnitTest()
 	
 	client.Finish()

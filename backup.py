@@ -5,6 +5,12 @@ from layers.SimpleFS import SimpleFS
 from layers.ChunkPushPullSystem import ChunkPushPullSystem
 from client import Client
 
+class FileInfo:
+	def __init__(self, ptr, path, length, mtime):
+		self.ptr = ptr
+		self.path = path
+		self.length = length
+		self.mtime = mtime
 
 class DifferentFormatException(Exception):
 	pass
@@ -20,18 +26,26 @@ class SimpleBackup:
 		self.fs = SimpleFS(cs)
 		if self.fs.IsFormatted() is False:
 			self.valid = False
+		self.files = None
+		self.lastvalid = 0
+		
+	def ValidRaise(self):
+		if self.valid is False:
+			raise DifferentFormatException()
+		# ensure listing has been created and recreate the listing
+		# if the last call to one this function is older than
+		# 30 seconds.. meaning we may have been link dropped which
+		# means our global block lock has likely been released
+		if self.files is None or time.time() - self.lastvalid > 30:
+			# try to lock the block
+			# enumerate file listing
+			self.files = self.EnumerateFiles()
 	
 	def PushFileFromMemory(self, lpath, prefix):
-		pass
-	def PullFileIntoMemory(self, rpath):
-		pass
+		self.ValidRaise()
 		
-	class FileInfo:
-		def __init__(self, ptr, path, length, mtime):
-			self.ptr = ptr
-			self.path = path
-			self.length = length
-			self.mtime = mtime
+	def PullFileIntoMemory(self, rpath):
+		self.ValidRaise()
 	'''
 		This will enumerate all the files and produce a list which contains:
 		
@@ -41,6 +55,8 @@ class SimpleBackup:
 		3. [ptr]
 	'''
 	def EnumerateFiles(self):
+		self.ValidRaise()
+		
 		fs = self.fs
 		out = []
 		flist = fs.EnumerateFileList()
