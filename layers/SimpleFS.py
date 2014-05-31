@@ -10,6 +10,8 @@ class SimpleFS(layers.interface.BasicFS):
 		self.client = cs.GetClient()
 		self.metabase = 500
 		
+		self.dbgf = None
+		
 	def Format(self):
 		client = self.client
 		cs = self.cs
@@ -26,8 +28,6 @@ class SimpleFS(layers.interface.BasicFS):
 			next, prev, nchunk, tsize, dlen, nlen = struct.unpack('>QQQQQH', client.Read(cur, 8 * 5 + 2))
 			# next file, next chunk, tchunksize, datalen, namelen
 			# read file name
-			
-			print('		next:%x chunk:%s tsize:%s dlen:%s nlen:%s' % (next, nchunk, tsize, dlen, nlen))
 			off = cur + 8 * 4 + 2
 			name = []
 			while nlen > 0:
@@ -37,7 +37,6 @@ class SimpleFS(layers.interface.BasicFS):
 				else:
 					clen = nlen
 				nlen = nlen - clen
-				print('		reading name part off:%x clen:%x' % (off, clen))
 				name.append(client.Read(off, clen))
 				boff = nchunk
 				if boff == 0 or nlen < 1:
@@ -80,7 +79,6 @@ class SimpleFS(layers.interface.BasicFS):
 		while True:
 			# free page
 			cs.PushChunkBySize(csize, cur)
-			print('	pushed %x:%s' % (cur, csize))
 			# get next chunk
 			if nchunk == 0:
 				break
@@ -95,8 +93,6 @@ class SimpleFS(layers.interface.BasicFS):
 		bpsz = cs.GetBasePageSize()
 		while chunk != 0:
 			nchunk, size = struct.unpack('>QQ', client.Read(chunk, 16))
-			
-			print('		pushing chunk:%x size:%x' % (chunk, size))
 			
 			# calculate level and push chunk back
 			level = (size / bpsz) - 1
@@ -120,7 +116,6 @@ class SimpleFS(layers.interface.BasicFS):
 			
 			# we are going to have to make it smaller
 			if tsize > newsize:
-				print('tsize > newsize')
 				if nchunk != 0:
 					# okay, there is no need for another chunk so
 					# we can drop the next chunk and any others
@@ -136,8 +131,6 @@ class SimpleFS(layers.interface.BasicFS):
 						level = level + 1
 						break
 					level = level - 1
-				
-				print('got level:%s original-level:%s' % (level, int(csize / bpsz)))
 				
 				if level != (csize / bpsz) - 1:
 					# allocate new chunk that is smaller for data
@@ -162,7 +155,6 @@ class SimpleFS(layers.interface.BasicFS):
 					return True
 			
 			if nchunk == 0:				# if no more chunks then exit
-				print('no more chunks')
 				break
 			chunk = nchunk				# get next chunk 
 			hoff = 16
@@ -211,7 +203,6 @@ class SimpleFS(layers.interface.BasicFS):
 		# subtract bytes
 		dlen = dlen - nlen
 		# write new sizes
-		print('dlen:%s nlen:%s' % (dlen, nlen))
 		client.Write(foff + 8 * 4, struct.pack('>QH', dlen, nlen))
 		
 	def CreateFile(self, path, size):
@@ -243,77 +234,76 @@ class SimpleFS(layers.interface.BasicFS):
 		next, prev, nchunk, csize, dlen, nlen = struct.unpack('>QQQQQH', client.Read(foff, 8 * 5 + 2))
 		foff = 8 * 5 + 2
 		
-		print('__RWFileMemory Start')
+		# debugging code
+		#if self.dbgf is None:
+		#	self.dbgf = open('tmp', 'r+b')
+		#	self.dbgf.truncate(1024 * 1024 * 50)
+		
 		
 		# unless they specify None move them past the name string
 		if offset is not None:
+			# move offset above the name bytes
 			offset = nlen + offset
 		else:
+			# let offset start at the name bytes
 			offset = 0
 			
+		# determine our total data to be read/written 
 		if write is True:
 			dlen = len(data)
 		else:
 			dlen = length
-		boff = nlen
+		
+		# our base starts at 0
+		boff = 0
+		# easily keeps track of our offset into data if we are writing
 		doffset = 0
+		
 		while True:
-			# are we current on a chunk where our offset begins
-			print('	boff:%x csize:%x foff:%x (csize-foff):%x offset:%x' % (boff, csize, foff, csize - foff, offset))
+			# if true then we can start reading/writing
 			if boff + (csize - foff) >= offset:
-				# we our offset from base of chunk
+				# this is out offset inside this chunk
 				aoff = offset - boff
 				
 				# the most we can read or write on this chunk
-				print('	csize:%x aoff:%x foff:%x' % (csize, aoff, foff))
 				ava = csize - (aoff + foff)
-				print('	ava:%x' % ava)
+				# check if we need to read less
 				if ava > dlen:
-					# if its more than we need then adjust
+					# if we need to real less then read less
 					ava = dlen
-				print('	ava:%x' % ava)
-				# yes, let us read what we can or need
+					
+				# decide if this is a read or write operation
 				if write is False:
-					print('	reading ava:%x' % ava)
 					out.append(client.Read(chunk + foff + aoff, ava))
+					#self.dbgf.seek(chunk + foff + aoff)
+					#out.append(self.dbgf.read(ava))
 				else:
-					cbsz = client.GetBlockSize()
-					print('	ava:%x' % ava)
-					print('	writing... cbsz:%x offset:%x ava:%x' % (cbsz, chunk + foff + aoff, ava))
-					print('	ava:%x' % ava)
+					#self.dbgf.seek(chunk + foff + aoff)
+					#self.dbgf.write(data[doffset:doffset + ava])
 					client.Write(chunk + foff + aoff, data[doffset:doffset + ava])
+					# i could use dlen, but this is much easier to understand
 					doffset = doffset + ava
-					print('offset:%s ava:%s' % (offset, ava))
+				# subtract what we read from the remaining
 				dlen = dlen - ava
-				# increment offset further
+				# increment our offset by what we read
 				offset = offset + ava
-				
-			if dlen < 1:
-				print('READ DLEN:%s < 1' % dlen)
-				break
 			
-			#data = client.Read(chunk + foff, ava)
-			#dlen = dlen - ava
-			#out.append(data)
-		
+			# if no more data to read then exit
+			if dlen < 1:
+				break
+					
 			# track our base offset (minus the header)
 			boff = boff + (csize - foff)
-			print('	get next chunk')
 			# switch to next chunk
 			if nchunk == 0:
-				print('		exit nchunk was zero')
 				# exit even if not done reading/writing
+				if dlen > 0:
+					raise Exception('EXITED BEFORE FINISHED')
 				break
 			chunk = nchunk
-			# header is only 16 bytes
 			# read next chunk and current chunk size
 			nchunk, csize = struct.unpack('>QQ', client.Read(chunk, 16))
-			# figure out who last wrote this csize
-			
-			if csize == 0:
-				client.DebugPrintWhoWrote(chunk + 8, 8)
-			
-			toff = chunk + 8
+			# adust the header size to 16 bytes
 			foff = 16
 			
 		if write is False:
@@ -346,14 +336,12 @@ class SimpleFS(layers.interface.BasicFS):
 		while True:
 			# write the next link on the previous chunk
 			if lchunk is not None:
-				print('		writing backwards link')
 				client.Write(lchunk[0] + hoff, struct.pack('>Q', fchunk[0]))
 			
 			assert(fchunk[1] > 4000)
 			# write chunk header
 			if fheader:
 				fheader = False
-				print('fchunk[0]:%x' % fchunk[0])
 				client.Write(fchunk[0], struct.pack('>QQQQQH', rootfileoff, 0, 0, fchunk[1], size, 0))
 				hoff = 16
 				tlen = tlen + (fchunk[1] - (8 * 5 + 2))
@@ -365,7 +353,6 @@ class SimpleFS(layers.interface.BasicFS):
 			
 			# exit out no more chunks
 			if len(chunks) < 1:
-				print('no more chunks; exiting tlen:%x size:%x' % (tlen, size))
 				break
 			# get next chunk
 			fchunk = chunks.pop()
@@ -444,12 +431,13 @@ class SimpleFS(layers.interface.BasicFS):
 		while True:
 			# decide what to do
 			op = random.randint(0, 1)
-			print('op:%s' % op)
 			
 			if len(files) < 1:
 				op = 0
-			if len(files) > 100:
-				op = 1
+			#if len(files) > 20:
+			#	print('too many files')
+			#	time.sleep(3)
+			#	op = 1
 			
 			# verify all files and content
 			if True:
@@ -465,19 +453,28 @@ class SimpleFS(layers.interface.BasicFS):
 						print('OUCH')
 						print('fsz:%s' % fsz)
 						print('f:%x' % f)
-						print(len(fdata), fdata[0:20])
-						print(len(_data), _data[0:20])	
+						x = 0
+						while x < len(fdata):
+							if _data[x] != fdata[x]:
+								print(len(fdata), x, fdata[x - 10:x + 10])
+								print(len(_data), x, _data[x - 10:x + 10])
+								break
+							x = x + 1
 						bad = True
 				if bad:
 					raise Exception('file data not correct')
 			
 			# delete file
-			if op == 1:
+			if op == 1 and len(files) > 0:
 				i = random.randint(0, len(files) - 1)
 				file = files[i]
-				print('deleting file %s' % file[2])
+				print('deleting index:%s file:[%s]' % (i, file[2]))
 				self.DeleteFile(file[0])
-				files.pop(i)
+				_files = []
+				for _file in files:
+					if _file != file:
+						_files.append(_file)
+				files = _files
 				continue
 			
 			# make new file
@@ -485,8 +482,11 @@ class SimpleFS(layers.interface.BasicFS):
 				# random name
 				name = IDGen.gen(4)
 				# random size (between 10 bytes and a little over 1MB)
-				fsz = random.randint(len(name) + 10, len(name) + 8192)
+				fsz = random.randint(len(name) + 10, len(name) + 1024)
 				f = self.CreateFile(name, fsz)
+				
+				if f is None:
+					continue
 				
 				print('created:[%s] f:%x' % (name, f))
 				# make sure f is not already used
@@ -495,14 +495,11 @@ class SimpleFS(layers.interface.BasicFS):
 						if f == file[0]:
 							print('dup:%x' % f)
 							raise Exception('faddr duplicate')
-					print('		created')
 				if f is not None:
 					afsz = fsz - len(name) - 5
 					data = IDGen.gen(afsz)
-					print('		writing:[%s...]' % data[0:5])
 					self.WriteFile(f, 0, data)
 					files.append((f, afsz, name, data))
-					print('		done writing')
 				else:
 					# we need to delete a file
 					raise Exception('out of memory')
