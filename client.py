@@ -65,13 +65,15 @@ class Client(interface.StandardClient):
 		self.cache_dirty = []
 		self.cache_lastread = {}
 		self.cache_lastwrite = {}
-		self.cache_maxpages = 128
+		self.cache_maxpages = 1024 * 4
 		
 		self.wholds = []
 		
 		self.wdbg = []
 		
 		self.vexecwarnlimit = 1024
+		
+		self.blocksz = None
 		
 		# set the defaults
 		self.SetCommunicationExceptionTime(60 * 15)
@@ -148,6 +150,12 @@ class Client(interface.StandardClient):
 		
 		ct = time.time()
 		
+		# eliminate this kinda call
+		if self.blocksz is None:
+			self.blocksz = self.GetBlockSize()
+		
+		#print('cache read offset:%x length:%x' % (offset, length))
+		
 		out = []
 		while dleft > 0:
 			if page not in cache:
@@ -155,14 +163,14 @@ class Client(interface.StandardClient):
 				# oops.. this sucks.. we need to check that we are
 				# not going to read past the end of our remote block
 				# and if we are cut this cache line short in size
-				blocksz = self.GetBlockSize()
-				if page >= blocksz:
+				if page >= self.blocksz:
 					raise OperationException('read past end of virtual block device')
-				if page + 1024 >= blocksz:
-					psz = blocksz - page
+				if page + 1024 >= self.blocksz:
+					psz = self.blocksz - page
 				else:
 					psz = 1024
 				cache[page] = self.Read(page, psz, block = True, cache = False)
+				print('loading page:%x from cache' % page)
 				#print('loading page:%x' % page)
 				assert(len(cache[page]) == psz)
 				#print('[read] cache page:%x length:%x' % (page, len(cache[page])))
@@ -181,7 +189,6 @@ class Client(interface.StandardClient):
 			#print('read page:%x loffset:%x' % (page, loffset))
 			data = cache[page][loffset:loffset + ava]
 			out.append(data)
-			
 			
 			offset = offset + ava
 			page = offset & ~0x3ff
@@ -337,14 +344,11 @@ class Client(interface.StandardClient):
 			return self.__Write(offset, data, block = block, hold = block, discard = discard, cache = cache, wt = wt, ticknet = ticknet)
 		loffset = 0
 		rets = []
-		print('doing multiple write')
 		while loffset < len(data):
 			lsz = 1200
 			if lsz > len(data) - loffset:
 				lsz = len(data) - loffset
 			_data = data[loffset:loffset + lsz]
-			
-			print('loffset:%s' % loffset)
 			
 			ret = self.__Write(offset + loffset, _data, block = block, hold = block, discard = discard, cache = cache, wt = wt, ticknet = ticknet)
 			
@@ -475,6 +479,8 @@ class Client(interface.StandardClient):
 		return ret
 		
 	def Lock(self, offset, data, block = True):
+		self.DoBlockingLinkSetup()
+		
 		_data = struct.pack('>BQ', PktCodeClient.BlockLock, offset) + data
 		data, vector = BuildEncryptedMessage(self.link, _data)
 		self.outgoing[vector] = (vector, 0, data, self.cryper, _data)
@@ -487,6 +493,8 @@ class Client(interface.StandardClient):
 		return ret
 		
 	def Unlock(self, offset, block = True):
+		self.DoBlockingLinkSetup()
+	
 		_data = struct.pack('>BQ', PktCodeClient.BlockUnlock, offset)
 		data, vector = BuildEncryptedMessage(self.link, _data)
 		self.outgoing[vector] = (vector, 0, data, self.crypter, _data)
@@ -499,6 +507,7 @@ class Client(interface.StandardClient):
 		return ret
 		
 	def GetBlockSize(self, block = True):
+		self.DoBlockingLinkSetup()
 		
 		_data = struct.pack('>B', PktCodeClient.BlockSize)
 		data, vector = BuildEncryptedMessage(self.link, _data)
@@ -585,13 +594,16 @@ class Client(interface.StandardClient):
 				#	outgoing[out[0]] = (out[0], (ct - 5) + 0.1, out[2], out[3], out[4])
 				#	out = outgoing[out[0]]
 				
-				if ct - out[1] > 5:
+				if ct - out[1] > 1:
 					if out[1] == 0:
 						# record the last time we send a packet but
 						# do not include any resends (because they
 						# can indicate a need to re-establish the
 						# link)
 						self.lmst = ct
+					if out[1] > 0:
+						print('.', end='')
+						sys.stdout.flush()
 					# it has been too long so resend it
 					if self.crypter != out[3]:
 						# re-encrypt the data
@@ -655,7 +667,7 @@ class Client(interface.StandardClient):
 				self.sock.settimeout(0.1)
 			while True:
 				try:
-					data, addr = self.sock.recvfrom(0xffff)
+					data, addr = self.sock.recvfrom(4096)
 					# record last time we recieved a message
 					self.lmt = time.time()		
 				except Exception as e:
@@ -875,6 +887,7 @@ class Client(interface.StandardClient):
 	def UnitTestCache(self):
 		fd = open('tmp', 'r+b')
 		bsz = self.GetBlockSize()
+		bsz = 1024 * 128
 		fd.truncate(bsz)
 		writes = []
 		
@@ -903,11 +916,12 @@ class Client(interface.StandardClient):
 					print('------------------')
 					print(data)
 					raise Exception('data does not match')
-				else:
-					print('match off:%s sz:%s' % (off, sz))
 		
-			off = random.randint(1, bsz - 1)
-			sz = random.randint(1, 1024 * 4)
+			while True:
+				off = random.randint(1, bsz - 1)
+				sz = random.randint(1, 1024 * 20)
+				if off + sz < bsz:
+					break
 			if sz > bsz - off:
 				sz = bsz - off 
 			
@@ -927,7 +941,7 @@ class Client(interface.StandardClient):
 		
 def doClient(rhost, bid):
 	# 192.168.1.120
-	client = Client('192.168.1.120', 1874, bytes(bid, 'utf8'))
+	client = Client(rhost, 1874, bytes(bid, 'utf8'))
 	
 	#client.Read(0, 8)
 	#client.UnitTestCache()
