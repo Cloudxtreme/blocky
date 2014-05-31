@@ -2,6 +2,7 @@
 
 	Contents:
 	
+	0. Current Status And Plan
 	1. Can I Use It?
 	2. How Do I Generate Or Use Public Keys?
 	3. Where Is The Server?
@@ -11,7 +12,18 @@
 	7. What Can It Do In Terms Of Security?
 	8. How Does It Work?
 	9. What Is The Finished Client Intended To Do?
-													
+
+Current Status And Plan
+	The current status is early development release meaning it is
+	only usable by developers. I am very close to making a user
+	release meaning it will have functionality to backup files and
+	store them on the server.
+	
+	I am currently implementing the SimpleFS as there are a few
+	functions left, then I plan to actually implement the backup
+	system which will scan a directory and push changes to the
+	remote server.
+					
 Can I Use It?
 	At the moment the answer is partially, and depends on if you are
 	a developer or a casual user. As a casual user you would want to
