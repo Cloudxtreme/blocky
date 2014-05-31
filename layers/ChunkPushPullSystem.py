@@ -145,7 +145,6 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 				
 				del segments[i]
 				tt = time.time() - st
-				print('freeing:%s' % tt)
 				# try to allocate again, and if fails
 				# then we will free another
 				continue
@@ -158,8 +157,8 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 					for _chunk in segment:
 						s = chunk[0]
 						_s = _chunk[0]
-						e = (chunk[0] + chunk[1]) - 1
-						_e = (_chunk[0] + _chunk[1]) - 1
+						e = (chunk[0] + chunk[1])
+						_e = (_chunk[0] + _chunk[1])
 						if (s >= _s and s <= _e) or \
 						   (e >= _s and e <= _e) or \
 						   (_s >= s and _s <= e) or \
@@ -211,11 +210,12 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 				#print('none left in level:%s so going lower' % level)
 				# no chunks left, try lower level
 				return self.__AllocChunksForSegment(seglength, level - 1, chunks, initialsub, repeatsub)
-			print('used chunk:%x from level:%s' % (chunk, level))
 			if len(chunks) < 1:
-				seglength = seglength - (lchunksz + initialsub)
+				# for the very first chunk subtract an initial value (used for accounting for header space)
+				seglength = seglength - (lchunksz - initialsub)
 			else:
-				seglength = seglength - (lchunksz + repeatsub)
+				# for any other than first subtract a repeat value (used for accounting for header space)
+				seglength = seglength - (lchunksz - repeatsub)
 			chunks.append((chunk, lchunksz, level))
 			if seglength < 1:
 				return True
@@ -230,14 +230,11 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 	def PushBasePage(self, page):
 		client = self.client
 		
-		print('	push base page:%x' % page)
-		
 		level = 0
 		boff = struct.unpack('>Q', client.Read(200 + level * 8, 8))[0]
 		next, top = struct.unpack('>QH', client.Read(boff, 10))
 		if top == self.bucketmaxslots:
 			# create new bucket from one of the pages
-			printf('creating new bucket for base page buckets')
 			time.sleep(2)
 			client.WriteHold(page, struct.pack('>QH', boff, 0))
 			client.WriteHold(200 + level * 8, struct.pack('>Q', page))
@@ -279,7 +276,6 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 
 		
 	def FillLevelOnce(self, level):
-		print('filling in level:%s' % level)
 		if level + 1 >= self.levels:
 			return False
 		chunk = self.PullChunk(level + 1)
@@ -301,14 +297,12 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 		
 	def __PullChunk(self, level, slackpages):
 		client = self.client
-		print('pulling chunk from level:%s' % level)
 		boff = struct.unpack('>Q', client.Read(200 + level * 8, 8))[0]
 		next, top = struct.unpack('>QH', client.Read(boff, 10))
 		if top == 0:
 			#print('		bucket for level empty')
 			# drop this page and get next
 			if next == 0:
-				print('			no more buckets')
 				# if we have to go any higher we are out of memory
 				if level + 1 >= self.levels:
 					return None
@@ -320,8 +314,6 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 			client.Write(200 + level * 8, struct.pack('>Q', next))
 			# store this unused base sized page
 			slackpages.append(boff)
-			print('		next:%x top:%s' % (next, top))
-			print('		stored slack page:%x' % boff)
 			# try again..
 			return self.__PullChunk(level, slackpages)
 		chunk = struct.unpack('>Q', client.Read(boff + 10 + (top - 1) * 8, 8))[0]
@@ -329,11 +321,9 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 		if chunk == 0x315b000:
 			self.catchwrite = (boff, boff + 10)
 		
-		print('pulled chunk:%x from level:%x top:%s' % (chunk, level, top))
 		#print('		chunk:%s' % chunk)
 		client.Write(boff, struct.pack('>QH', next, top - 1))
 		next, top = struct.unpack('>QH', client.Read(boff, 10))
-		print('	double check top:%s' % top)
 		
 		#print('returning chunk:%x level:%s top:%s' % (chunk, level, top - 1))
 		return chunk
