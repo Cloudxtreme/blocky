@@ -4,6 +4,15 @@ import random
 import inspect
 from misc import *
 
+'''
+	When a read/write occurs inside the meta-data this is thrown
+	if it extends outside of that region in order to help developers
+	catch these problems. If you want to write meta data and file data
+	then it is recommened to write them separately.
+'''
+class RWPastMetaDataException(Exception):
+	pass
+
 class SimpleFS(layers.interface.BasicFS):
 	def __init__(self, cs):
 		self.cs = cs
@@ -12,12 +21,18 @@ class SimpleFS(layers.interface.BasicFS):
 		
 		self.dbgf = None
 		
+	def IsFormatted(self):
+		sig = client.Read(16, 8)
+		
+		if sig == b'sifssifs':
+			return True
+		return False
+		
 	def Format(self):
 		client = self.client
-		cs = self.cs
 		# write our signature field
-		client.Write(16, b'sifssifs')
 		client.Write(self.metabase, struct.pack('>Q', 0))
+		client.Write(16, b'sifssifs')
 		
 	def EnumerateFileList(self):
 		client = self.client
@@ -194,7 +209,7 @@ class SimpleFS(layers.interface.BasicFS):
 		# exit we are done
 		return True
 	
-	def SetNameLength(self, foff, nlen):
+	def SetMetaLength(self, foff, nlen):
 		client = self.client
 		# get old sizes
 		dlen, _nlen = struct.unpack('>QH', client.Read(foff + 8 * 4, 8 + 2))
@@ -205,17 +220,20 @@ class SimpleFS(layers.interface.BasicFS):
 		# write new sizes
 		client.Write(foff + 8 * 4, struct.pack('>QH', dlen, nlen))
 		
-	def CreateFile(self, path, size):
+	def CreateFile(self, path, size, mdatetime = 0):
 		if type(path) is str:
 			path = bytes(path, 'utf8')
 		foff = self.AllocateFile(size + len(path))
 		if foff is None:
 			return None
+			
+		path = struct.pack('>Q', mdatetime)
+			
 		self.WriteFile(foff, None, path)
-		self.SetNameLength(foff, len(path))
+		self.SetMetaLength(foff, len(path))
 		return foff
 		
-	def GetNameLength(self, foff):
+	def GetMetaLength(self, foff):
 		client = self.client
 		next, prev, nchunk, csize, dlen, nlen = struct.unpack('>QQQQQ', client.Read(foff, 8 * 5 + 2))
 		return nlen
@@ -224,9 +242,8 @@ class SimpleFS(layers.interface.BasicFS):
 		return self.__RWFileMemory(foff, length = length, offset = offset)
 		
 	def WriteFile(self, foff, offset, data):
-		
 		return self.__RWFileMemory(foff, offset = offset, data = data, write = True)
-		
+	
 	def __RWFileMemory(self, foff, offset = 0, length = 0, data = None, write = False):
 		client = self.client
 		out = []
@@ -248,11 +265,16 @@ class SimpleFS(layers.interface.BasicFS):
 			# let offset start at the name bytes
 			offset = 0
 			
-		# determine our total data to be read/written 
+		# determine our total data to be read/written, and 
+		# if we are writing to meta-data make sure we are
+		# not writing past the end of it
 		if write is True:
 			dlen = len(data)
 		else:
 			dlen = length
+			
+		if offset == 0 and offset + dlen > nlen:
+			raise RWPastMetaDataException()
 		
 		# our base starts at 0
 		boff = 0
@@ -429,6 +451,9 @@ class SimpleFS(layers.interface.BasicFS):
 		random.seed(93820192)
 		
 		while True:
+			if client.GetOutstandingCount() >= 100:
+				while client.GetOutstandingCount() >= 100:
+					client.HandlePackets()
 			# decide what to do
 			op = random.randint(0, 1)
 			

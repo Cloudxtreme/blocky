@@ -32,6 +32,15 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 		self.base = base
 		self.doffset = doffset
 		
+	def IsFormatted(self):
+		client = self.client
+		
+		seg = client.Read(0, 8)
+		
+		if seg == b'cppscpps':
+			return True
+		return False
+		
 	def Format(self, csize = 4096):
 		client = self.client
 	
@@ -101,8 +110,7 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 			fsz = fsz >> 1
 			clevel = clevel - 1
 	
-		print('done cs format')
-		client.Write(0, b'cmancman')
+		client.Write(0, b'cppscpps')
 		return
 
 	def UnitTest(self):

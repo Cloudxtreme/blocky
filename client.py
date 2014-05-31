@@ -12,6 +12,7 @@ import math
 import layers.interface as interface
 import traceback
 import inspect
+
 from layers.SimpleFS import SimpleFS
 from layers.ChunkPushPullSystem import ChunkPushPullSystem
 
@@ -594,7 +595,7 @@ class Client(interface.StandardClient):
 				#	outgoing[out[0]] = (out[0], (ct - 5) + 0.1, out[2], out[3], out[4])
 				#	out = outgoing[out[0]]
 				
-				if ct - out[1] > 1:
+				if ct - out[1] > 5:
 					if out[1] == 0:
 						# record the last time we send a packet but
 						# do not include any resends (because they
