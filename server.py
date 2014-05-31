@@ -170,6 +170,12 @@ def server(lip, lport):
 	wta = 0
 	wtc = 0
 	wtlr = 0
+	pc = 0
+	pcst = time.time()
+	
+	hdt = 0					# highest delta time (helps find long pauses)
+	
+	st = time.time()
 	
 	llic = time.time()
 	lbuc = time.time()
@@ -272,10 +278,15 @@ def server(lip, lport):
 						outgoing[vector] = (vector, time.time(), edata)
 						sock.sendto(edata, link['addr'])
 		
+		dt = time.time() - st
+		if dt > hdt:
+			hdt = dt
+		
+		
 		st = time.time()
 		try:
-			data, addr = sock.recvfrom(0xffff)
-			
+			data, addr = sock.recvfrom(4096)
+			pc = pc + 1
 			bytesin = bytesin + len(data)
 			
 		except socket.timeout as e:
@@ -287,6 +298,13 @@ def server(lip, lport):
 		wtc = wtc + 1
 		
 		if time.time() - wtlr > 5:
+			print('longest-wait:%s' % hdt)
+		
+			pcd = time.time() - pcst
+			pcst = time.time()
+			print('packet-count/second:%s' % (pc / pcd))
+			pc = 0
+			
 			wtlr = time.time()
 			print('wait time average %s' % (wta / wtc))
 			tt = time.time() - bytestime
