@@ -4,15 +4,6 @@ import random
 import inspect
 from misc import *
 
-'''
-	When a read/write occurs inside the meta-data this is thrown
-	if it extends outside of that region in order to help developers
-	catch these problems. If you want to write meta data and file data
-	then it is recommened to write them separately.
-'''
-class RWPastMetaDataException(Exception):
-	pass
-
 class SimpleFS(layers.interface.BasicFS):
 	def __init__(self, cs):
 		self.cs = cs
@@ -272,9 +263,6 @@ class SimpleFS(layers.interface.BasicFS):
 			dlen = len(data)
 		else:
 			dlen = length
-			
-		if offset == 0 and offset + dlen > nlen:
-			raise RWPastMetaDataException()
 		
 		# our base starts at 0
 		boff = 0
@@ -513,7 +501,7 @@ class SimpleFS(layers.interface.BasicFS):
 				if f is None:
 					continue
 				
-				print('created:[%s] f:%x' % (name, f))
+				print('created:[%s] f:%x count:%s' % (name, f, len(files)))
 				# make sure f is not already used
 				if True:
 					for file in files:
