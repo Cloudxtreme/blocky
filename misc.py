@@ -125,8 +125,8 @@ class PktCodeServer:
 	ReadSuccess			= 8
 	Exchange8Success	= 9
 	OperationFailure	= 10
-	UnlockSuccess		= 11
-	UnlockFailed		= 12
+	BlockUnlockSuccess	= 11
+	BlockUnlockFailed	= 12
 	LockFailedOverlap	= 13
 	LockFailedMax		= 14
 	LockSuccess			= 15
