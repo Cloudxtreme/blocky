@@ -15,8 +15,9 @@ class SimpleFS(layers.interface.BasicFS):
 	def TryLock(self):
 		client = self.client
 		
-		client.Lock
-		if client.Exchange8(self.metabase + 8, ) == 0:
+		if client.BlockLock(self.metabase + 8) is True:
+			return True
+		return False
 		
 	def IsFormatted(self):
 		sig = client.Read(16, 8)

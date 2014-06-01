@@ -754,10 +754,13 @@ def server(lip, lport):
 					if offset in link['locks']:
 						# unlock the lock
 						mm.seek(offset)
-						mm.write(struct.pack('>I', 0))
+						curval = mm.read(4)
+						# only unlock if we own the lock and it is locked
+						if curval == lid:
+							mm.write(struct.pack('>I', 0))
 						link['locks'].remove(offset)
 					
-					data = struct.pack('>BQQB', PktCodeServer.UnlockSuccess, vector, offset, force)
+					data = struct.pack('>BQQB', PktCodeServer.BlockUnlockSuccess, vector, offset, force)
 					data, _tmp = BuildEncryptedMessage(link, data)[0]
 					link['outgoing'][_tmp] = (_tmp, 0, data)
 					continue

@@ -399,7 +399,10 @@ class Client(interface.StandardClient):
 		if block and ret is None:
 			raise OperationException()
 		return ret
-		
+	
+	'''
+		@sdescription:		DISABLED
+	'''
 	def WriteAddLoop(self, offset, jump, count, data, block = True, discard = True, ticknet = False):
 		self.DoBlockingLinkSetup()
 			
@@ -422,6 +425,20 @@ class Client(interface.StandardClient):
 			raise OperationException()
 		return ret
 
+	'''
+		@sdescription:			This will copy data in the remote block.
+		@ldescription:			This is much faster because it data is never transferred. To
+		@+:					    get the same effect you could use a read and then write but
+		@+:   					it would suffer in performance.
+		@param.dst:				destination byte address
+		@param.src:				source byte address
+		@param.length:			length in bytes
+		@param.cache:			if false cache is not involved in this transaction
+		@param.ticknet:			during this call any waiting packets will be processed
+		@param.discard:			discard the results if any
+		@param.wt:				if cache is True then write-through the cache if True
+		@return:				the result of the operation if block is True
+	'''
 	def Copy(self, dst, src, length, block = True, cache = True, ticknet = False, discard = True, wt = True):
 		if cache:
 			ret = self.CacheRead(src, length)
@@ -448,8 +465,15 @@ class Client(interface.StandardClient):
 			raise OperationException()
 		return ret
 		
-		
-		
+	'''
+		@sdescription:			This will read data from the remote block.
+		@param.offset:			source byte address
+		@param.length:			length in bytes
+		@param.cache:			if false cache is not involved in this transaction
+		@param.ticknet:			during this call any waiting packets will be processed
+		@param.discard:			discard the results if any
+		@return:				the result of the operation if block is True
+	'''		
 	def Read(self, offset, length, block = True, cache = True, ticknet = False, discard = True):
 		self.DoBlockingLinkSetup()
 		
@@ -478,7 +502,7 @@ class Client(interface.StandardClient):
 		if block and ret is None:
 			raise OperationException()
 		return ret	
-		
+	
 	def Exchange8(self, offset, newval):
 		self.DoBlockingLinkSetup()
 		
@@ -493,18 +517,15 @@ class Client(interface.StandardClient):
 			raise OperationException()
 		return ret
 		
-	def BlockLock(self, offset, value = 0, block = True):
+	def BlockLock(self, offset, value = 0):
 		self.DoBlockingLinkSetup()
 		
 		_data = struct.pack('>BQI', PktCodeClient.BlockLock, offset, value)
 		data, vector = BuildEncryptedMessage(self.link, _data)
 		self.outgoing[vector] = (vector, 0, data, self.crypter, _data)
 		
-		if block is False:
-			vector = None
+		# always block on this call and return result
 		ret = self.HandlePackets(getvector = vector)
-		if block and ret is False:
-			raise OperationException()
 		return ret
 		
 	def BlockUnlock(self, offset, block = True):
@@ -517,9 +538,11 @@ class Client(interface.StandardClient):
 		if block is False:
 			vector = None
 		ret = self.HandlePackets(getvector = vector)
-		if block and ret is False:
-			raise OperationException()
-		return ret
+		# if blocking return the value
+		if block:
+			return ret
+		# if not-blocking just return success
+		return True
 		
 	def GetBlockSize(self, block = True):
 		self.DoBlockingLinkSetup()
@@ -848,17 +871,17 @@ class Client(interface.StandardClient):
 				if vector == getvector:
 					return (False, vector, True)
 				return (False, vector, False)
-		elif	type == PktCodeServer.LockSuccess:
+		elif	type == PktCodeServer.BlockLockSuccess:
 				vector, offset, length = struct.unpack_from('>QQQ', data)
 				if vector == getvector:
 					return (True, vector, True)
 				return (True, vector, False)
-		elif	type == PktCodeServer.UnlockFailed:
+		elif	type == PktCodeServer.BlockUnlockFailed:
 				vector, offset, force = struct.unpack_from('>QQB', data)
 				if vector == getvector:
 					return (False, vector, True)
 				return (False, vector, False)
-		elif	type == PktCodeServer.UnlockSuccess:
+		elif	type == PktCodeServer.BlockUnlockSuccess:
 				vector, offset, force = struct.unpack_from('>QQB', data)
 				if vector == getvector:
 					return (True, vector, True)
@@ -869,7 +892,7 @@ class Client(interface.StandardClient):
 					return (size, vector, True)
 				return (size, vector, False)
 		return (None, None, None)
-	
+
 	def GetPublicKey(self):
 		data = struct.pack('>BI', PktCodeClient.GetPublicKey, self.nid)
 		self.sock.send(data)
