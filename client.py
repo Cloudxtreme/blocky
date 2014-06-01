@@ -15,19 +15,9 @@ import inspect
 
 from layers.SimpleFS import SimpleFS
 from layers.ChunkPushPullSystem import ChunkPushPullSystem
+from ClientExceptions import *
 
 from misc import *
-
-class OperationException(Exception):
-	pass
-class LockingException(Exception):
-	pass
-class CommunicationException(Exception):
-	pass
-class WriteHoldCountException(Exception):
-	pass
-class LinkDropException(Exception):
-	pass
 	
 '''
 	This will create a client object and provide access to the remote block.
@@ -88,11 +78,11 @@ class Client(interface.StandardClient):
 		self.trans_idgen = IDGen(4)
 	
 	def TransactionStart(self):
-		if self.trans_count == 0:
+		if self.trans_curid is None:
 			# go ahead and flush anything that is dirty
 			self.CacheFlush()
 		
-		self.trans_curid = self.trans_idgen.ugen()
+		self.trans_curid = struct.unpack('>I', self.trans_idgen.ugen())[0]
 		
 		# this is used for __TransactionRestore
 		self.trans_stack.append((self.cache_autodropandflush, self.linkdropthrowexception, self.trans_curid))
@@ -123,13 +113,15 @@ class Client(interface.StandardClient):
 		
 	def TransactionCommit(self):
 		# drop cache because everything should be in write holding state
-		self.CacheDrop()
+		# (i have changed this since if we execute write hold with success
+		#  then the remote server should match our cache)
+		#self.CacheFlush()
 		# execute the writes being held on the server
 		self.DoWriteHold()
 		# restore previous values
 		self.__TransactionRestore()
 	
-	def SetCacheAutoDropAndFlush(self, value)
+	def SetCacheAutoDropAndFlush(self, value):
 		self.cache_autodropandflush = value
 	
 	def SetLinkDropThrowException(self, value):
@@ -228,6 +220,7 @@ class Client(interface.StandardClient):
 				# not going to read past the end of our remote block
 				# and if we are cut this cache line short in size
 				if page >= self.blocksz:
+					print('offset:%x blocksz:%x' % (offset, self.blocksz))
 					raise OperationException('read past end of virtual block device')
 				if page + 1024 >= self.blocksz:
 					psz = self.blocksz - page
@@ -465,7 +458,9 @@ class Client(interface.StandardClient):
 	def __Write(self, offset, data, block = False, hold = False, discard = True, cache = True, wt = True, ticknet = False):
 		self.DoBlockingLinkSetup()
 		
-		if hold:
+		# force any writes to be held if inside a
+		# transaction block
+		if hold or self.trans_curid is not None:
 			# see if transaction is currently on-going
 			# and if so use that ID, otherwise use the
 			# default id of zero
@@ -1036,10 +1031,11 @@ class Client(interface.StandardClient):
 		needs to be run to verify that the code still works correctly.
 	'''
 	def UnitTestCache(self):
-		fd = open('tmp', 'r+b')
 		bsz = self.GetBlockSize()
-		bsz = 1024 * 128
+		fd = open('tmp', 'w')
 		fd.truncate(bsz)
+		fd.close()
+		fd = open('tmp', 'r+b')
 		writes = []
 		
 		random.seed(340)
@@ -1101,8 +1097,8 @@ def doClient(rhost, bid):
 	cs = ChunkPushPullSystem(client, load = False)
 	cs.Format()
 	
-	#cs.UnitTest()
-	#exit()
+	cs.UnitTest()
+	exit()
 	
 	fs = SimpleFS(cs)
 	fs.UnitTest()
