@@ -26,6 +26,8 @@ class CommunicationException(Exception):
 	pass
 class WriteHoldCountException(Exception):
 	pass
+class LinkDropException(Exception):
+	pass
 	
 '''
 	This will create a client object and provide access to the remote block.
@@ -62,11 +64,12 @@ class Client(interface.StandardClient):
 		self.lmst = 0			# last message send time
 		self.lmt = 0			# last message (recieved) time
 		
-		self.cache = {}
-		self.cache_dirty = []
-		self.cache_lastread = {}
-		self.cache_lastwrite = {}
-		self.cache_maxpages = 1024 * 4
+		self.CacheDrop()						# initialize cache system
+		self.cache_maxpages = 1024 * 4			# auto-drop-and-flush uses this
+		self.cache_autodropandflush = False
+		
+		self.linkdrophandler = None
+		self.linkdropthrowexception = False
 		
 		self.wholds = []
 		
@@ -79,20 +82,67 @@ class Client(interface.StandardClient):
 		# set the defaults
 		self.SetCommunicationExceptionTime(60 * 15)
 		self.SetRelinkTimeout(60 * 5)
+		
+		self.trans_stack = []
+		self.trans_curid = None
+		self.trans_idgen = IDGen(4)
 	
-	def GetWriteHoldCount(self):
-		self.DoBlockingLinkSetup()
-
-		_data = struct.pack('>B', PktCodeClient.GetWriteHoldCount)
-		data, vector = BuildEncryptedMessage(self.link, _data)
-		self.outgoing[vector] = (vector, 0, data, self.crypter, _data)
+	def TransactionStart(self):
+		if self.trans_count == 0:
+			# go ahead and flush anything that is dirty
+			self.CacheFlush()
 		
-		ret = self.HandlePackets(getvector = vector)
-		if ret is None:
-			raise OperationException()
+		self.trans_curid = self.trans_idgen.ugen()
 		
-		return ret
+		# this is used for __TransactionRestore
+		self.trans_stack.append((self.cache_autodropandflush, self.linkdropthrowexception, self.trans_curid))
+		# set these like we need them for a transaction; we dont
+		# want cache being written and we want an exception thrown
+		# if the link fails so we can abort the transaction
+		self.cache_autodropandflush = False
+		self.linkdropthrowexception = True
+		
+		return self.trans_curid
+		
+	def TransactionDrop(self):
+		# drop the cache because it is dirtied with the
+		# write holds that we are not going to execute
+		self.CacheDrop()
+		# instead of executing with commit we just drop the
+		# write holds and consider them never being done
+		self.FlushWriteHold()
+		# restore previous values
+		self.__TransactionRestore()
+		
+	def __TransactionRestore(self):
+		# restore stuff
+		res = self.trans_stack.pop()
+		self.cache_autodropandflush = res[0]
+		self.linkdropthrowexception = res[1]
+		self.trans_curid = res[2]
+		
+	def TransactionCommit(self):
+		# drop cache because everything should be in write holding state
+		self.CacheDrop()
+		# execute the writes being held on the server
+		self.DoWriteHold()
+		# restore previous values
+		self.__TransactionRestore()
+	
+	def SetCacheAutoDropAndFlush(self, value)
+		self.cache_autodropandflush = value
+	
+	def SetLinkDropThrowException(self, value):
+		self.linkdropthrowexception = value
+	
+	def SetLinkDropHandler(self, handler):
+		self.linkdrophandler = handler
 
+	'''
+		@sdescription:		Ensures all outgoing packets have been sent
+		@+:					and recieved by the remote end. Also flushes
+		@+:					cache to remote.
+	'''
 	def Finish(self):
 		self.CacheFlush()
 		while self.GetOutstandingCount() > 0:
@@ -100,6 +150,14 @@ class Client(interface.StandardClient):
 				pkt = self.outgoing[k]
 			self.HandlePackets()
 			time.sleep(0.2)
+	'''
+		@sdescription:		Drop all cache and DO NOT commit any.
+	'''
+	def CacheDrop(self):
+		self.cache = {}
+		self.cache_dirty = []
+		self.cache_lastread = {}
+		self.cache_lastwrite = {}
 		
 	def CacheFlush(self):
 		# go through all our dirty pages
@@ -108,9 +166,12 @@ class Client(interface.StandardClient):
 			# write the page to the server
 			self.Write(page, cache[page])
 			print('flushed cache page %x to server' % page)
-		return
+		return 
 	
 	def CacheTick(self):
+		if self.cache_autodropandflush is False:
+			return 
+	
 		if len(self.cache) > self.cache_maxpages:
 			# drop the oldest page
 			oldpage = None
@@ -130,7 +191,9 @@ class Client(interface.StandardClient):
 			#       then it does seem possible that a read could occur before the pacet
 			#       containing the page to be written on the server essentially reading
 			#		any old data
-			self.Write(oldpage, self.cache[oldpage])
+			if oldpage in self.cache_dirty:
+				self.cache_dirty.remove(oldpage)
+				self.Write(oldpage, self.cache[oldpage])
 			# drop old page
 			#print('commiting and dropping cache page %x' % page)
 			del self.cache[oldpage]
@@ -247,9 +310,40 @@ class Client(interface.StandardClient):
 			
 			offset = offset + lsize
 			page = offset & ~0x3ff
+
+	def GetWriteHoldCount(self, id = None):
+		self.DoBlockingLinkSetup()
+
+		if id is None:
+			# see if transaction is currently on-going
+			# and if so use that ID, otherwise use the
+			# default id of zero
+			if self.trans_curid != None:
+				id = self.trans_curid
+			else:
+				id = 0
 		
-	def FlushWriteHold(self):
-		_data = struct.pack('>B', PktCodeClient.FlushWriteHold)
+		_data = struct.pack('>BI', PktCodeClient.GetWriteHoldCount, id)
+		data, vector = BuildEncryptedMessage(self.link, _data)
+		self.outgoing[vector] = (vector, 0, data, self.crypter, _data)
+		
+		ret = self.HandlePackets(getvector = vector)
+		if ret is None:
+			raise OperationException()
+		
+		return ret
+		
+	def FlushWriteHold(self, id = None):
+		if id is None:
+			# see if transaction is currently on-going
+			# and if so use that ID, otherwise use the
+			# default id of zero
+			if self.trans_curid != None:
+				id = self.trans_curid
+			else:
+				id = 0
+
+		_data = struct.pack('>BI', PktCodeClient.FlushWriteHold, id)
 		data, vector = BuildEncryptedMessage(self.link, _data)
 		self.outgoing[vector] = (vector, 0, data, self.crypter, _data)
 		
@@ -258,8 +352,17 @@ class Client(interface.StandardClient):
 			raise OperationException()
 		return ret
 
-	def DoWriteHold(self, block = False, discard = True, verify = False, ticknet = False):
+	def DoWriteHold(self, block = False, discard = True, verify = False, ticknet = False, id = None):
 		self.DoBlockingLinkSetup()
+		
+		if id is None:
+			# see if transaction is currently on-going
+			# and if so use that ID, otherwise use the
+			# default id of zero
+			if self.trans_curid != None:
+				id = self.trans_curid
+			else:
+				id = 0
 
 		# verify will ensure the writes are all there
 		# by checking the count and if not correct updatin
@@ -268,22 +371,24 @@ class Client(interface.StandardClient):
 			tryagain = True
 			while tryagain:
 				# get server count of writes on hold to verify they are all there
-				scnt = self.GetWriteHoldCount()
+				scnt = self.GetWriteHoldCount(id = id)
 				# are all the writes there?
 				if len(self.wholds) != scnt:
 					# flush the ones there if any
-					self.FlushWriteHold()
+					self.FlushWriteHold(id = id)
 					# try to re-send them
 					for hold in self.wholds:
-						# send the write hold
-						self.WriteHold(hold[0], hold[1])
+						# make sure the ID is right
+						if hold[2] == id:
+							# send the write hold
+							self.WriteHold(hold[0], hold[1], hold[2])
 					# re-check they are all there
 					# (loop again)
 				else:
 					# exit the loop
 					tryagain = False
 		
-		_data = struct.pack('>B', PktCodeClient.DoWriteHold)
+		_data = struct.pack('>BI', PktCodeClient.DoWriteHold, id)
 		data, vector = BuildEncryptedMessage(self.link, _data)
 		self.outgoing[vector] = (vector, 0, data, self.crypter, _data)
 
@@ -304,8 +409,6 @@ class Client(interface.StandardClient):
 			vector = None
 		# block for this specific vector
 		ret = self.HandlePackets(getvector = vector)
-		
-
 		
 		if block and ret is None:
 			raise OperationException()
@@ -342,7 +445,7 @@ class Client(interface.StandardClient):
 		
 		# split the write up if we need too if it is very large
 		if len(data) < 1200:
-			return self.__Write(offset, data, block = block, hold = block, discard = discard, cache = cache, wt = wt, ticknet = ticknet)
+			return self.__Write(offset, data, block = block, hold = hold, discard = discard, cache = cache, wt = wt, ticknet = ticknet)
 		loffset = 0
 		rets = []
 		while loffset < len(data):
@@ -351,7 +454,7 @@ class Client(interface.StandardClient):
 				lsz = len(data) - loffset
 			_data = data[loffset:loffset + lsz]
 			
-			ret = self.__Write(offset + loffset, _data, block = block, hold = block, discard = discard, cache = cache, wt = wt, ticknet = ticknet)
+			ret = self.__Write(offset + loffset, _data, block = block, hold = hold, discard = discard, cache = cache, wt = wt, ticknet = ticknet)
 			
 			rets.append(ret)
 			
@@ -363,9 +466,18 @@ class Client(interface.StandardClient):
 		self.DoBlockingLinkSetup()
 		
 		if hold:
+			# see if transaction is currently on-going
+			# and if so use that ID, otherwise use the
+			# default id of zero
+			if self.trans_curid != None:
+				id = self.trans_curid
+			else:
+				id = 0
 			code = PktCodeClient.WriteHold
+			_data = struct.pack('>BQI', code, offset, id) + data
 		else:
 			code = PktCodeClient.Write
+			_data = struct.pack('>BQ', code, offset) + data
 	
 		# serves mainly to allow reads from cache to work properly
 		# you can still block or not block on your writes
@@ -375,10 +487,9 @@ class Client(interface.StandardClient):
 			if wt is False:
 				return
 		
-		_data = struct.pack('>BQ', code, offset) + data
+		# <message> was built up at top of this method
 		data, vector = BuildEncryptedMessage(self.link, _data)
 		self.outgoing[vector] = (vector, 0, data, self.crypter, _data)
-		#print('sent write')
 		
 		# does not make sense to discard and block (will just fil up vexecuted)
 		if discard is not True and block is False:
@@ -677,17 +788,19 @@ class Client(interface.StandardClient):
 			for ta in toadd:
 				outgoing[ta[0]] = ta
 			
-			
 			# if we have not send a message (first time send)
 			# after so long AND we have not recieved a message
 			# AND we are supposed to handle the relink then attempt
 			# to relink
-			#print('handlerelink:%s lmst-delta:%s lmt-delta:%s' % (handlerelink, ct - self.lmst, ct - self.lmt))
 			if handlerelink and len(self.outgoing) > 0 and ct - self.lmst > self.relinkafter and ct - self.lmt > self.relinkafter:
-			#if handlerelink and self.lmt > 0 and self.lmst - self.lmt > self.relinkafter:
 				# okay link is considered bad, try to setup a link again
+				if self.linkdrophandler is not None:
+					# this can throw and exception if it desired to do so
+					self.linkdrophandler()
+				if self.linkdropthrowexception is True:
+					raise LinkDropException()
 				self.linkvalid = False
-				self.DoBlockingLinkSetup()
+				self.DoBlockingLinkSetup()	
 			
 			if timeout is not None and time.time() - ter > timeout:
 				return

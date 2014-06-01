@@ -597,7 +597,7 @@ def server(lip, lport):
 				mm = block['mm']					
 				
 				if type == PktCodeClient.WriteHold:
-					offset = struct.unpack_from('>Q', data)[0]
+					offset, id = struct.unpack_from('>QI', data)[0]
 					data = data[8:]
 					if offset + len(data) > block['size']:
 						data = struct.pack('>BQ', PktCodeServer.OperationFailure, vector)
@@ -614,7 +614,7 @@ def server(lip, lport):
 						print('too many holds')
 						continue
 					
-					link['wholds'].append((offset, data))
+					link['wholds'].append((offset, data, id))
 					
 					data = struct.pack('>BQQH', PktCodeServer.WriteSuccess, vector, offset, len(data))
 					data, _tmp = BuildEncryptedMessage(link, data)
@@ -622,8 +622,16 @@ def server(lip, lport):
 					continue	
 			
 				if type == PktCodeClient.FlushWriteHold:
+					id = struct.unpack('>I', data)[0]
 					# flush them if any
-					link['wholds'] = []
+					_toremove = []
+					for hold in link['wholds']:
+						if hold[2] == id:
+							_toremove.append(hold)
+					for hold in _toremove:
+						link['wholds'].remove(hold)
+					_toremove = None
+					
 					data = struct.pack('>BQ', PktCodeServer.FlushWriteHold, vector)
 					data, _tmp = BuildEncryptedMessage(link, data)
 					link['outgoing'][_tmp] = (_tmp, 0, data)
@@ -631,23 +639,34 @@ def server(lip, lport):
 			
 				# lets the client verify all write are holding
 				if type == PktCodeClient.GetWriteHoldCount:
-					data = struct.pack('>BQQ', PktCodeServer.GetWriteHoldCount, vector, len(link['wholds']))
+					id = struct.unpack('>I', data)[0]
+					cnt = 0
+					for hold in link['wholds']:
+						if hold[2] == id:
+							cnt = cnt + 1
+					data = struct.pack('>BQQ', PktCodeServer.GetWriteHoldCount, vector, cnt)
 					data, _tmp = BuildEncryptedMessage(link, data)
 					link['outgoing'][_tmp] = (_tmp, 0, data)
 					continue
 				
 				# very critical section
 				if type == PktCodeClient.DoWriteHold:
+					id = struct.unpack('>I', data)[0]
 					# all these writes need to happen, or else we fail
 					# our contract with the client and risk their data
 					# being in a corrupt state
 					CriticalEnter()
+					_toremove = []
 					for hold in link['wholds']:
-						mm.seek(hold[0])
-						mm.write(hold[1])
+						if hold[2] == id:
+							mm.seek(hold[0])
+							mm.write(hold[1])
+							_toremove.append(hold)
+					# clear write holds matching the ID
+					for hold in _toremove:
+						link['wholds'].remove(hold)
+					_toremove = None
 					CriticalExit()
-					# clear write holds
-					link['wholds'] = []
 					
 					data = struct.pack('>BQQH', PktCodeServer.WriteSuccess, vector, 0, 0)
 					data, _tmp = BuildEncryptedMessage(link, data)
