@@ -597,8 +597,8 @@ def server(lip, lport):
 				mm = block['mm']					
 				
 				if type == PktCodeClient.WriteHold:
-					offset, id = struct.unpack_from('>QI', data)[0]
-					data = data[8:]
+					offset, id = struct.unpack_from('>QI', data)
+					data = data[8+4:]
 					if offset + len(data) > block['size']:
 						data = struct.pack('>BQ', PktCodeServer.OperationFailure, vector)
 						data, _tmp = BuildEncryptedMessage(link, data)
@@ -619,7 +619,7 @@ def server(lip, lport):
 					data = struct.pack('>BQQH', PktCodeServer.WriteSuccess, vector, offset, len(data))
 					data, _tmp = BuildEncryptedMessage(link, data)
 					link['outgoing'][_tmp] = (_tmp, 0, data)
-					continue	
+					continue
 			
 				if type == PktCodeClient.FlushWriteHold:
 					id = struct.unpack('>I', data)[0]
@@ -801,7 +801,7 @@ def server(lip, lport):
 					oldval = mm.read(4)
 					
 					# if we already own the lock just reply success
-					if oldval == lid
+					if oldval == lid:
 						data = struct.pack('>B', PktCodeServer.BlockLockSuccess)
 						data, _tmp = BuildEncryptedMessage(link, data)
 						link['outgoing'][_tmp] = (_tmp, 0, data)
