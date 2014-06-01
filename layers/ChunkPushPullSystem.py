@@ -230,12 +230,12 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 		# if we still have some left, try the next lower level
 		return self.__AllocChunksForSegment(seglength, level - 1, chunks, initialsub, repeatsub)
 	
-	def PushBasePages(self, pages):
+	def __PushBasePages(self, pages):
 		for page in pages:
 			self.PushBasePage(page)
 		return True
 	
-	def PushBasePage(self, page):
+	def __PushBasePage(self, page):
 		client = self.client
 		
 		level = 0
@@ -259,31 +259,37 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 		return self.PushChunk(level, chunk)
 		
 	def PushChunk(self, level, chunk):
-		client = self.client
-		# short-circuit to the specialized function for pages (not chunks)
-		#print('push-chunk level:%s chunk:%x' % (level, chunk))
-		if level == 0:
-			return self.PushBasePage(chunk)
-		boff = struct.unpack('>Q', client.Read(int(200 + level * 8), 8))[0]
-		next, top = struct.unpack('>QH', client.Read(boff, 10))
-		if top == self.bucketmaxslots:
-			# create new bucket from ... a page (base page / base chunk)
-			page = self.PullChunk(0)
-			if page is None:
-				return False
-			client.WriteHold(page, struct.pack('>QH', boff, 0))
-			client.WriteHold(200 + level * 8, struct.pack('>Q', page))
-			next = boff
-			boff = page
-			top = 0
-			
-		# push chunk into bucket
-		client.WriteHold(boff + 10 + top * 8, struct.pack('>Q', chunk))
-		client.WriteHold(boff, struct.pack('>QH', next, top + 1))
-		client.DoWriteHold()
-
+		try:
+			client = self.client
+			client.TransactionStart()
+			# short-circuit to the specialized function for pages (not chunks)
+			#print('push-chunk level:%s chunk:%x' % (level, chunk))
+			if level == 0:
+				res = self.__PushBasePage(chunk)
+				client.TransactionCommit()
+				return res
+			boff = struct.unpack('>Q', client.Read(int(200 + level * 8), 8))[0]
+			next, top = struct.unpack('>QH', client.Read(boff, 10))
+			if top == self.bucketmaxslots:
+				# create new bucket from ... a page (base page / base chunk)
+				page = self.PullChunk(0)
+				if page is None:
+					client.TransactionCommit()
+					return False
+				client.WriteHold(page, struct.pack('>QH', boff, 0))
+				client.WriteHold(200 + level * 8, struct.pack('>Q', page))
+				next = boff
+				boff = page
+				top = 0
+				
+			# push chunk into bucket
+			client.WriteHold(boff + 10 + top * 8, struct.pack('>Q', chunk))
+			client.WriteHold(boff, struct.pack('>QH', next, top + 1))
+			client.TransactionCommit()
+		except LinkDropException:
+			client.TransactionDrop()
 		
-	def FillLevelOnce(self, level):
+	def __FillLevelOnce(self, level):
 		if level + 1 >= self.levels:
 			return False
 		chunk = self.PullChunk(level + 1)
@@ -299,8 +305,24 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 	
 	def PullChunk(self, level = 0):
 		slackpages = []
-		ret = self.__PullChunk(level, slackpages)
-		self.PushBasePages(slackpages)
+		while True:
+			try:
+				self.client.TransactionStart()
+				ret = self.__PullChunk(level, slackpages)
+				self.client.TransactionCommit()
+			except LinkDropException:
+				self.client.TransactionDrop()
+				continue
+			break
+		while True:
+			try:
+				self.client.TransactionStart()
+				self.__PushBasePages(slackpages)
+				self.client.TransactionCommit()
+			except LinkDropException:
+				self.client.TransactionDrop()
+				continue
+			break
 		return ret
 		
 	def __PullChunk(self, level, slackpages):
@@ -315,25 +337,18 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 				if level + 1 >= self.levels:
 					return None
 				# lets try to fill it with some pages
-				if self.FillLevelOnce(level) is False:
+				if self.__FillLevelOnce(level) is False:
 					#print('			filling level was fale')
 					return None
 				return self.__PullChunk(level, slackpages)
-			client.Write(200 + level * 8, struct.pack('>Q', next))
+			client.WriteHold(200 + level * 8, struct.pack('>Q', next))
 			# store this unused base sized page
 			slackpages.append(boff)
 			# try again..
 			return self.__PullChunk(level, slackpages)
+			
 		chunk = struct.unpack('>Q', client.Read(boff + 10 + (top - 1) * 8, 8))[0]
-		
-		if chunk == 0x315b000:
-			self.catchwrite = (boff, boff + 10)
-		
-		#print('		chunk:%s' % chunk)
-		client.Write(boff, struct.pack('>QH', next, top - 1))
-		next, top = struct.unpack('>QH', client.Read(boff, 10))
-		
-		#print('returning chunk:%x level:%s top:%s' % (chunk, level, top - 1))
+		client.WriteHold(boff, struct.pack('>QH', next, top - 1))
 		return chunk
 		
 	def GetClient(self):
