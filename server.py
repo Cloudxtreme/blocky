@@ -615,7 +615,29 @@ def server(lip, lport):
 						print('too many holds')
 						continue
 					
-					link['wholds'].append((offset, data, id))
+					# we need to insert this write operation in the correct order
+					# and using the vector should be the easiest;
+					x = 0
+					hx = None
+					while x < len(link['wholds']):
+						hold = link['wholds'][x]
+						if hold[2] == id:
+							if vector > hold[3]:
+									# find the largest vector that
+									# we are higher than and save
+									# the list index for it
+									hx = x
+						x = x + 1
+					if hx is None:
+						# add to end of list
+						#print('write hold inserted at end')
+						link['wholds'].append((offset, data, id, vector))
+					else:
+						# insert after the highest found
+						#print('write hold inserted at highest')
+						link['wholds'].insert(hx + 1, (offset, data, id, vector))
+					
+					#link['wholds'].append((offset, data, id, vector))
 					
 					data = struct.pack('>BQQH', PktCodeServer.WriteSuccess, vector, offset, len(data))
 					data, _tmp = BuildEncryptedMessage(link, data)

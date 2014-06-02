@@ -197,6 +197,7 @@ class Client(interface.StandardClient):
 			#       containing the page to be written on the server essentially reading
 			#		any old data
 			if oldpage in self.cache_dirty:
+				print('CACHE WRITE DIRTY PAGE:%x' % oldpage)
 				self.cache_dirty.remove(oldpage)
 				self.Write(oldpage, self.cache[oldpage])
 			# drop old page
@@ -375,6 +376,8 @@ class Client(interface.StandardClient):
 	def DoWriteHold(self, block = False, discard = True, verify = True, ticknet = False, id = None):
 		self.DoBlockingLinkSetup()
 		
+		#st = time.time()
+		
 		if id is None:
 			# see if transaction is currently on-going
 			# and if so use that ID, otherwise use the
@@ -391,28 +394,33 @@ class Client(interface.StandardClient):
 		if verify:
 			tryagain = True
 			while tryagain:
-				st = time.time()
 				allthere = False
 				while allthere is False:
 					allthere = True
 					for hold in self.wholds:
+						holdid = hold.id
+						if holdid != id:
+							continue
 						vec = hold.vector
 						if vec not in self.vexecuted or self.vexecuted[vec] == None:
-							print('vec:%s not here yet' % vec)
-							print(self.vexecuted)
+							#print('vec:%s not here yet' % vec)
+							#print(self.vexecuted)
 							allthere = False
 							break
 					if allthere is True:
 						# exit and then verify once again that
 						# they are all there
-						print('all vectors in place')
+						#print('all vectors in place')
 						break
 					# let the network tick and get them there
-					print('resending packets count:%s' % len(self.outgoing))
+					#print('resending packets count:%s' % len(self.outgoing))
 					self.HandlePackets()
 					# sleep just a little to take some load
 					# off the CPU while we loop here..
-					time.sleep(0.04)
+					time.sleep(0)
+				
+				#tt = time.time() - st
+				#print('total-time:%s' % tt)
 				
 				# remove them from vexecuted (only ones matching ID)
 				for hold in self.wholds:
@@ -423,17 +431,34 @@ class Client(interface.StandardClient):
 			
 				# get server count of writes on hold to verify they are all there
 				scnt = self.GetWriteHoldCount(id = id)
+				
+				# get local count
+				lcnt = 0
+				for hold in self.wholds:
+					if hold.id == id:
+						lcnt = lcnt + 1
+				
 				# are all the writes there?
-				if len(self.wholds) != scnt:
+				if lcnt != scnt:
 					# flush the ones there if any (wait for response)
 					self.FlushWriteHold(id = id, block = True)
 					# try to re-send them
 					print('resending holds')
+					holdput = []
+					_toremove = []
 					for hold in self.wholds:
 						# make sure the ID is right
 						if hold.id == id:
 							# send the write hold
-							self.WriteHold(hold.offset, hold.data, block = True)
+							self.WriteHold(hold.offset, hold.data, block = True, holdput = holdput)
+							print('	sending hold with id:%s|%s offset:%s data-size:%s' % (hold.id, id, hold.offset, len(hold.data)))
+							_toremove.append(hold)
+					# remove the old holds (old vector)
+					for hold in _toremove:
+						self.wholds.remove(hold)
+					# add the new holds (new vector)
+					for hold in holdput:
+						self.wholds.append(hold)
 					# re-check they are all there
 					# (loop again)
 				else:
@@ -459,7 +484,7 @@ class Client(interface.StandardClient):
 
 		#if discard is False and block is False:
 		#	print('warning')
-			
+		
 		if block is False and ticknet is False:
 			return None
 		
@@ -472,8 +497,8 @@ class Client(interface.StandardClient):
 			raise OperationException()
 		return ret
 		
-	def WriteHold(self, offset, data, block = False, discard = True, ticknet = False, wt = True):
-		return self.Write(offset, data, block = block, hold = True, discard = discard, ticknet = ticknet, wt = wt)
+	def WriteHold(self, offset, data, block = False, discard = True, ticknet = False, wt = True, holdput = True):
+		return self.Write(offset, data, block = block, hold = True, discard = discard, ticknet = ticknet, wt = wt, holdput = holdput)
 	
 	if __debug__:
 		def DebugPrintWhoWrote(self, offset, length):
@@ -487,7 +512,7 @@ class Client(interface.StandardClient):
 					print('		f:%s l:%s offset:%x length:%x' % (dbg[0], dbg[1], s, length))
 			return True
 					
-	def Write(self, offset, data,  block = False, hold = False, discard = True, cache = True, wt = True, ticknet = False):
+	def Write(self, offset, data,  block = False, hold = False, discard = True, cache = True, wt = True, ticknet = False, holdput = True):
 		# track who called us and the write data
 		#self.wdbg
 		#frm = inspect.stack()[1]
@@ -501,7 +526,7 @@ class Client(interface.StandardClient):
 		
 		# split the write up if we need too if it is very large
 		if len(data) < 1200:
-			return self.__Write(offset, data, block = block, hold = hold, discard = discard, cache = cache, wt = wt, ticknet = ticknet)
+			return self.__Write(offset, data, block = block, hold = hold, discard = discard, cache = cache, wt = wt, ticknet = ticknet, holdput = holdput)
 		loffset = 0
 		rets = []
 		while loffset < len(data):
@@ -510,7 +535,7 @@ class Client(interface.StandardClient):
 				lsz = len(data) - loffset
 			_data = data[loffset:loffset + lsz]
 			
-			ret = self.__Write(offset + loffset, _data, block = block, hold = hold, discard = discard, cache = cache, wt = wt, ticknet = ticknet)
+			ret = self.__Write(offset + loffset, _data, block = block, hold = hold, discard = discard, cache = cache, wt = wt, ticknet = ticknet, holdput = holdput)
 			
 			rets.append(ret)
 			
@@ -518,7 +543,7 @@ class Client(interface.StandardClient):
 			loffset = loffset + lsz
 		return rets
 	
-	def __Write(self, offset, data, block = False, hold = False, discard = True, cache = True, wt = True, ticknet = False):
+	def __Write(self, offset, data, block = False, hold = False, discard = True, cache = True, wt = True, ticknet = False, holdput = True):
 		self.DoBlockingLinkSetup()
 		
 		# force any writes to be held if inside a
@@ -557,10 +582,12 @@ class Client(interface.StandardClient):
 		self.outgoing[vector] = (vector, 0, data, self.crypter, _data)
 		
 		if catchforhold:
-			# we want to add it to our internal list of holds
-			# and also catch the result so we know that it
-			# made it to the server
-			self.wholds.append(WriteHold(offset, data, id, vector))
+			# only add to holds by default; when we resend holds (because some got
+			# lost for whatever reason) this function is called 
+			if holdput is not True:
+				holdput.append(WriteHold(offset, data, id, vector))
+			else:
+				self.wholds.append(WriteHold(offset, data, id, vector))
 			self.vexecuted[vector] = None
 		
 		# does not make sense to discard and block (will just fil up vexecuted)
@@ -940,7 +967,7 @@ class Client(interface.StandardClient):
 						# at this point we were either blocking for a specific
 						# packet, or we were just ticking the net in any case
 						# just break out and let 
-						print('no link so exiting loop')
+						#print('no link so exiting loop')
 						break
 					
 					if match is None:
@@ -968,7 +995,7 @@ class Client(interface.StandardClient):
 							# just throw the result/reply away
 							if vector in self.vexecuted:
 								# do not discard results, but store them
-								print('added to vexecuted for vector:%s' % vector)
+								#print('added to vexecuted for vector:%s' % vector)
 								#print(ret)
 								#raise Exception('LOL')
 								self.vexecuted[vector] = ret
@@ -1012,7 +1039,7 @@ class Client(interface.StandardClient):
 				data = data[4:]
 				if 'ulid' in self.link:
 					print('link changed from old:%s to new:%s' % (self.link['ulid'], data))
-				self.link['vman'] = VectorMan()
+				self.link['vman'].Flush()
 				self.link['ulid'] = data
 				print('connecting to block')
 				self.ConnectBlock(self.bid)

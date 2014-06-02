@@ -174,6 +174,14 @@ class VectorMan:
 		self.high = 100
 		self.irange = []
 		
+	def Flush(self):
+		# flush the irange, but keep our same
+		# vectors that we have been using, and
+		# just keep going since a vector is a
+		# 64-bit value it should NEVER wrap any
+		# time within the year at least, LOL
+		self.irange = []
+		
 	def IsVectorGood(self, vector, max = None):
 		irange = self.irange
 		for ir in irange:
