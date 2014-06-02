@@ -19,6 +19,13 @@ from ClientExceptions import *
 
 from misc import *
 	
+class WriteHold:
+	def __init__(self, offset, data, id, vector):
+		self.offset = offset
+		self.data = data
+		self.id = id
+		self.vector = vector
+	
 '''
 	This will create a client object and provide access to the remote block.
 '''
@@ -384,28 +391,35 @@ class Client(interface.StandardClient):
 		if verify:
 			tryagain = True
 			while tryagain:
+				st = time.time()
 				allthere = False
 				while allthere is False:
 					allthere = True
 					for hold in self.wholds:
-						vec = hold[3]
+						vec = hold.vector
 						if vec not in self.vexecuted or self.vexecuted[vec] == None:
+							print('vec:%s not here yet' % vec)
+							print(self.vexecuted)
 							allthere = False
 							break
 					if allthere is True:
 						# exit and then verify once again that
 						# they are all there
+						print('all vectors in place')
 						break
 					# let the network tick and get them there
+					print('resending packets count:%s' % len(self.outgoing))
 					self.HandlePackets()
 					# sleep just a little to take some load
 					# off the CPU while we loop here..
-					time.sleep(0)
+					time.sleep(0.04)
 				
-				# remove them from vexecuted
+				# remove them from vexecuted (only ones matching ID)
 				for hold in self.wholds:
-					vec = hold[3]
-					del self.vexecuted[vec]
+					if hold.id == id:
+						vec = hold.vector
+						if vec in self.vexecuted:
+							del self.vexecuted[vec]
 			
 				# get server count of writes on hold to verify they are all there
 				scnt = self.GetWriteHoldCount(id = id)
@@ -417,9 +431,9 @@ class Client(interface.StandardClient):
 					print('resending holds')
 					for hold in self.wholds:
 						# make sure the ID is right
-						if hold[2] == id:
+						if hold.id == id:
 							# send the write hold
-							self.WriteHold(hold[0], hold[1], block = True)
+							self.WriteHold(hold.offset, hold.data, block = True)
 					# re-check they are all there
 					# (loop again)
 				else:
@@ -433,7 +447,7 @@ class Client(interface.StandardClient):
 		# flush the write holds on our side
 		_toremove = []
 		for hold in self.wholds:
-			if hold[2] == id:
+			if hold.id == id:
 				_toremove.append(hold)
 		for hold in _toremove:
 			self.wholds.remove(hold)
@@ -546,7 +560,7 @@ class Client(interface.StandardClient):
 			# we want to add it to our internal list of holds
 			# and also catch the result so we know that it
 			# made it to the server
-			self.wholds.append((offset, data, id, vector))
+			self.wholds.append(WriteHold(offset, data, id, vector))
 			self.vexecuted[vector] = None
 		
 		# does not make sense to discard and block (will just fil up vexecuted)
@@ -745,7 +759,7 @@ class Client(interface.StandardClient):
 				# will allow us to rehandle it here
 				self.HandlePackets(handlerelink = False, timeout = 5)
 				# if too much time passes, abort and try again
-				if time.time() - st > 15:
+				if time.time() - st > 8:
 					break
 				time.sleep(0)
 				# check if we have been trying for way too long
@@ -813,6 +827,8 @@ class Client(interface.StandardClient):
 						sys.stdout.flush()
 					# it has been too long so resend it
 					if self.crypter != out[3]:
+						# grab the old vector
+						oldvector = out[0]
 						# re-encrypt the data
 						data, vector = BuildEncryptedMessage(self.link, out[4])
 						#outgoing[vector] = (vector, out[1], data, self.crypter, data[4])
@@ -820,11 +836,24 @@ class Client(interface.StandardClient):
 						# schedule the old vector to be removed
 						toremove.append(out[0])
 						# do not send old vector, just skip it
-						print('re-encrypted old-vector:%s new-vector:%s' % (out[0], vector))
+						print('re-encrypted old-vector:%s new-vector:%s' % (oldvector, vector))
 						# if we were waiting for this packet then we need to
 						# reset it to the new vector numeral
 						if out[0] == getvector:
 							getvector = vector
+						# check if it was in write holds and change vector
+						for hold in self.wholds:
+							print('checking write hold for remapping after re-encryption')
+							if hold.vector == oldvector:
+								print('got old vector:%s for write hold as new:%s' % (oldvector, vector))
+								# see if result is in self-vexecuted
+								if oldvector in self.vexecuted:
+									print('		rekeyed results')
+									# rekey it with new vector and remove old
+									self.vexecuted[vector] = self.vexecuted[oldvector]
+									del self.vexecuted[oldvector]
+								# set vector to new vector
+								hold.vector = vector
 						continue
 					try:
 						self.sock.send(out[2])
@@ -853,6 +882,7 @@ class Client(interface.StandardClient):
 			#print('handlerelink:%s a:%s b:%s relinkafter:%s' % (handlerelink, ct - self.lmst, ct - self.lmt, self.relinkafter))
 			#print('handlerelink:%s' % handlerelink)
 			if handlerelink and len(self.outgoing) > 0 and ct - self.lmst > self.relinkafter and ct - self.lmt > self.relinkafter:
+				self.linkvalid = False
 				print('communications timeout')
 				# okay link is considered bad, try to setup a link again
 				if self.linkdrophandler is not None:
@@ -860,7 +890,6 @@ class Client(interface.StandardClient):
 					self.linkdrophandler()
 				if self.linkdropthrowexception is True:
 					raise LinkDropException()
-				self.linkvalid = False
 				self.DoBlockingLinkSetup()	
 			
 			if timeout is not None and time.time() - ter > timeout:
@@ -880,7 +909,7 @@ class Client(interface.StandardClient):
 			while True:
 				try:
 					data, addr = self.sock.recvfrom(4096)
-				except Exception as e:
+				except Exception:
 					break
 				encrypted, data, svector = ProcessRawSocketMessage(self.link, data)
 
@@ -922,6 +951,9 @@ class Client(interface.StandardClient):
 					if vector is not None:
 						# had this happen, not sure
 						if vector in self.outgoing:
+							if vector in self.vexecuted:
+								# i dunno.. having to do this here too..
+								self.vexecuted[vector] = ret
 							del self.outgoing[vector]
 							#print('removing vector:%s' % vector)
 					
@@ -936,7 +968,7 @@ class Client(interface.StandardClient):
 							# just throw the result/reply away
 							if vector in self.vexecuted:
 								# do not discard results, but store them
-								#print('added to vexecuted for vector:%s' % vector)
+								print('added to vexecuted for vector:%s' % vector)
 								#print(ret)
 								#raise Exception('LOL')
 								self.vexecuted[vector] = ret
@@ -998,6 +1030,7 @@ class Client(interface.StandardClient):
 			# TODO: this could be trouble... link delay.. server queues
 			# up block connect... then later client relinks up.. gets
 			# older one.. screws things up maybe?
+			print('.... LINK VALID!')
 			self.linkvalid = True
 			if vector == getvector:
 				return (True, vector, True)
@@ -1067,7 +1100,10 @@ class Client(interface.StandardClient):
 
 	def GetPublicKey(self):
 		data = struct.pack('>BI', PktCodeClient.GetPublicKey, self.nid)
-		self.sock.send(data)
+		try:
+			self.sock.send(data)
+		except:
+			pass
 		
 	def SetupEncryption(self):
 		key = IDGen.gen(512)
@@ -1077,7 +1113,10 @@ class Client(interface.StandardClient):
 		# encrypt key with public key
 		key = pubcrypt.crypt(key, self.pubkey)
 		data = struct.pack('>BI', PktCodeClient.SetupEncryption, self.nid) + key
-		self.sock.send(data)
+		try:
+			self.sock.send(data)
+		except:
+			pass
 				
 	def ConnectBlock(self, bid):
 		sock = self.sock

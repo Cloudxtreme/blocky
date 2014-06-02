@@ -286,6 +286,7 @@ def BuildEncryptedMessage(link, data, vector = None):
 def ProcessRawSocketMessage(link, data):	
 	# if not encrypted then just return message whole
 	if data[0] != PktCodeClient.EncryptedMessage:
+		print('NOT ENCRYPTED', data)
 		return (False, data, None)
 	
 	crypter = link['crypter']
@@ -321,3 +322,7 @@ def ProcessRawSocketMessage(link, data):
 	vector = struct.unpack_from('>Q', data)[0]
 	# return the actual data (which has now been decrypted and verified)
 	return (True, data[8:], vector)
+
+
+
+

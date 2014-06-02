@@ -659,7 +659,7 @@ def server(lip, lport):
 					# our contract with the client and risk their data
 					# being in a corrupt state
 					
-					print('doing write hold for id:%x all-count:%s' % (id, len(link['wholds'])))
+					#print('doing write hold for id:%x all-count:%s' % (id, len(link['wholds'])))
 					
 					CriticalEnter()
 					_toremove = []
@@ -668,8 +668,6 @@ def server(lip, lport):
 							mm.seek(hold[0])
 							mm.write(hold[1])
 							_toremove.append(hold)
-						else:
-							print('cur-id:%x    hold[2]:%x' % (id, hold[2]))
 					# clear write holds matching the ID
 					for hold in _toremove:
 						link['wholds'].remove(hold)
@@ -677,7 +675,7 @@ def server(lip, lport):
 					CriticalExit()
 					
 					#print('holds:%s' % link['wholds'])
-					print('		all-count:%s' % (len(link['wholds'])))
+					#print('		all-count:%s' % (len(link['wholds'])))
 					
 					data = struct.pack('>BQQH', PktCodeServer.WriteSuccess, vector, 0, 0)
 					data, _tmp = BuildEncryptedMessage(link, data)
