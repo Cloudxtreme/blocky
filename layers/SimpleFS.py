@@ -4,6 +4,9 @@ import random
 import inspect
 from misc import *
 
+class LockFailedException(Exception):
+	pass
+
 class SimpleFS(layers.interface.BasicFS):
 	def __init__(self, cs):
 		self.cs = cs
@@ -11,29 +14,42 @@ class SimpleFS(layers.interface.BasicFS):
 		self.metabase = 500
 		
 		self.dbgf = None
+	
+	def ReleaseLock(self):
+		client = self.client
+		client.BlockUnlock(self.metabase + 8)
 		
 	def TryLock(self):
 		client = self.client
 		
 		if client.BlockLock(self.metabase + 8) is True:
 			return True
-		return False
+		raise LockFailedException()
 		
 	def IsFormatted(self):
+		client = self.client
 		sig = client.Read(16, 8)
 		
 		if sig == b'sifssifs':
 			return True
 		return False
 		
-	def Format(self):
+	def Format(self, forcelock = False):
 		client = self.client
+		if forcelock is False:
+			self.TryLock()
+	
 		# write our signature field
 		client.Write(self.metabase, struct.pack('>Q', 0))
+		client.Write(self.metabase + 8, struct.pack('>I', 0))
 		client.Write(16, b'sifssifs')
+		if forcelock is False:
+			self.ReleaseLock()
 		
 	def EnumerateFileList(self):
 		client = self.client
+		self.TryLock()
+		
 		files = []
 		cur = struct.unpack('>Q', client.Read(self.metabase, 8))[0]
 		while cur != 0:
@@ -60,16 +76,31 @@ class SimpleFS(layers.interface.BasicFS):
 			files.append((name, cur, dlen))
 			# get next file
 			cur = next
+		self.ReleaseLock()
 		return files
+		
 	def GetUniqueID(self):
-		raise Exception('Not Implement')
-	def GetFileListUniqueID(self):
-		raise Exception('Not Implement')
-	def GetChangeID(self):
-		raise Exception('Not Implement')
-	def DeleteFile(self, foff):
-		cs = self.cs
 		client = self.client
+		self.TryLock()
+		self.ReleaseLock()
+		raise Exception('Not Implement')
+	
+	def GetFileListUniqueID(self):
+		client = self.client
+		self.TryLock()
+		self.ReleaseLock()
+		raise Exception('Not Implement')
+	
+	def GetChangeID(self):
+		client = self.client
+		self.TryLock()
+		self.ReleaseLock()
+		raise Exception('Not Implement')
+		
+	def DeleteFile(self, foff):
+		client = self.client
+		self.TryLock()
+		cs = self.cs
 		
 		root = struct.unpack('>Q', client.Read(self.metabase, 8))[0]
 		next, prev, nchunk, csize, dlen, nlen = struct.unpack('>QQQQQH', client.Read(foff, 8 * 5 + 2))
@@ -101,6 +132,7 @@ class SimpleFS(layers.interface.BasicFS):
 			cur = nchunk
 			nchunk, csize = struct.unpack('>QQ', client.Read(cur, 8 * 2))
 		# we are done!
+		self.ReleaseLock()
 		
 	def __PushChunksInChain(self, chunk):
 		cs = self.cs
@@ -118,6 +150,8 @@ class SimpleFS(layers.interface.BasicFS):
 			chunk = nchunk
 	def TruncateFile(self, foff, newsize):
 		client = self.client
+		self.TryLock()
+		
 		cs = self.cs
 		next, prev, nchunk, csize, dlen, nlen = struct.unpack('>QQQQQH', client.Read(foff, 8 * 5 + 2))
 		hoff = 8 * 4 + 2
@@ -153,6 +187,7 @@ class SimpleFS(layers.interface.BasicFS):
 					print('level', level)
 					_chunk = cs.PullChunk(level)
 					if _chunk is None:
+						self.ReleaseLock()
 						return True
 					# copy old chunk data into new chunk
 					client.Copy(_chunk, chunk, bpsz << level)
@@ -168,6 +203,7 @@ class SimpleFS(layers.interface.BasicFS):
 					client.Write(foff + 8 * 4, struct.pack('>Q', newsize))
 					
 					# exit we are done
+					self.ReleaseLock()
 					return True
 			
 			if nchunk == 0:				# if no more chunks then exit
@@ -182,6 +218,7 @@ class SimpleFS(layers.interface.BasicFS):
 			chunks = cs.AllocChunksForSegment(newsize - tsize)
 			
 			if chunks is None:
+				self.ReleaseLock()
 				return False
 			
 			if hoff == 16:
@@ -208,10 +245,13 @@ class SimpleFS(layers.interface.BasicFS):
 			# write the new data size (5th field)
 			client.Write(foff + 8 * 4, struct.pack('>Q', newsize))
 		# exit we are done
+		self.ReleaseLock()
 		return True
 	
 	def SetMetaLength(self, foff, nlen):
 		client = self.client
+		self.TryLock()
+		
 		# get old sizes
 		dlen, _nlen = struct.unpack('>QH', client.Read(foff + 8 * 4, 8 + 2))
 		# restore bytes
@@ -220,23 +260,32 @@ class SimpleFS(layers.interface.BasicFS):
 		dlen = dlen - nlen
 		# write new sizes
 		client.Write(foff + 8 * 4, struct.pack('>QH', dlen, nlen))
+		self.ReleaseLock()
 		
 	def CreateFile(self, path, size, mdatetime = 0):
+		client = self.client
+		self.TryLock()
+		
 		if type(path) is str:
 			path = bytes(path, 'utf8')
 		foff = self.AllocateFile(size + len(path))
 		if foff is None:
+			self.ReleaseLock()
 			return None
 			
 		path = struct.pack('>Q', mdatetime)
 			
 		self.WriteFile(foff, None, path)
 		self.SetMetaLength(foff, len(path))
+		self.ReleaseLock()
 		return foff
 		
 	def GetMetaLength(self, foff):
 		client = self.client
+		self.TryLock()
+
 		next, prev, nchunk, csize, dlen, nlen = struct.unpack('>QQQQQ', client.Read(foff, 8 * 5 + 2))
+		self.ReleaseLock()
 		return nlen
 	
 	def ReadFile(self, foff, offset, length):
@@ -247,6 +296,8 @@ class SimpleFS(layers.interface.BasicFS):
 	
 	def __RWFileMemory(self, foff, offset = 0, length = 0, data = None, write = False):
 		client = self.client
+		self.TryLock()
+		
 		out = []
 		chunk = foff
 		next, prev, nchunk, csize, dlen, nlen = struct.unpack('>QQQQQH', client.Read(foff, 8 * 5 + 2))
@@ -318,6 +369,7 @@ class SimpleFS(layers.interface.BasicFS):
 			if nchunk == 0:
 				# exit even if not done reading/writing
 				if dlen > 0:
+					self.ReleaseLock()
 					raise Exception('EXITED BEFORE FINISHED')
 				break
 			chunk = nchunk
@@ -326,6 +378,7 @@ class SimpleFS(layers.interface.BasicFS):
 			# adust the header size to 16 bytes
 			foff = 16
 			
+		self.ReleaseLock()
 		if write is False:
 			return b''.join(out)
 		return dlen
@@ -339,9 +392,12 @@ class SimpleFS(layers.interface.BasicFS):
 		client = self.client
 		cs = self.cs
 		
+		self.TryLock()
+		
 		chunks = cs.AllocChunksForSegment(size, initialsub = 8 * 5 + 2, repeatsub = 8 * 2)
 		
 		if chunks is None:
+			self.ReleaseLock()
 			return None
 		
 		fchunk = chunks.pop()
@@ -391,6 +447,7 @@ class SimpleFS(layers.interface.BasicFS):
 				for chunk in chunks:
 					# push chunk back into free chunk buckets
 					cs.PushChunk(chunk[2], chunk[0])
+				self.ReleaseLock()
 				return None
 			# link to last chunk
 			client.Write(lchunk[0] + hoff, struct.pack('>Q', fchunk[0]))
@@ -418,17 +475,22 @@ class SimpleFS(layers.interface.BasicFS):
 		client.Write(rootfileoff + 8, struct.pack('>Q', rchunk[0]))
 		# set root pointer to newly allocated file
 		client.Write(self.metabase, struct.pack('>Q', rchunk[0]))
+		self.ReleaseLock()
 		return rchunk[0]
 	
 	def UnitTest(self):
 		client = self.client
 		cs = self.cs
 	
+		print('trying to format')
+	
 		self.Format()
 		
 		client.SetCommunicationExceptionTime(45)
 		client.SetRelinkTimeout(15)
 
+		print('done formatting')
+		
 		'''
 		data = IDGen.gen(1024 * 2)
 		f = self.CreateFile('apple', len(data))

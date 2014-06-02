@@ -14,11 +14,6 @@ import pprint
 import signal
 
 from misc import *
-
-'''
-	For testing I just import the client directly into this module!
-'''
-#from client import *
 	
 class TooManyVectorsException(Exception):
 	pass
@@ -798,20 +793,28 @@ def server(lip, lport):
 					continue
 					
 				if type == PktCodeClient.BlockUnlock:
-					offset = struct.unpack_from('>Q', data)
+					offset = struct.unpack_from('>Q', data)[0]
 					
-					# remove the lock specified
-					if offset in link['locks']:
-						# unlock the lock
-						mm.seek(offset)
-						curval = mm.read(4)
-						# only unlock if we own the lock and it is locked
-						if curval == lid:
+					mm.seek(offset)
+					cval = struct.unpack('>I', mm.read(4))[0]
+					cref = struct.unpack('>I', mm.read(4))[0]
+					_lid = struct.unpack('>I', lid)[0]
+					
+					# check if we own it (if not just dont unlock it)
+					if cval == _lid:
+						# decrement ref (if above zero)
+						if cref > 0:
+							cref = cref - 1
+							mm.seek(offset + 4)
+							mm.write(struct.pack('>I', cref))
+						
+						# unlock it
+						if cref == 0:
+							mm.seek(offset)
 							mm.write(struct.pack('>I', 0))
-						link['locks'].remove(offset)
 					
-					data = struct.pack('>BQQB', PktCodeServer.BlockUnlockSuccess, vector, offset, force)
-					data, _tmp = BuildEncryptedMessage(link, data)[0]
+					data = struct.pack('>BQQ', PktCodeServer.BlockUnlockSuccess, vector, offset)
+					data, _tmp = BuildEncryptedMessage(link, data)
 					link['outgoing'][_tmp] = (_tmp, 0, data)
 					continue
 					
@@ -821,38 +824,28 @@ def server(lip, lport):
 						data = struct.pack('>BQ', PktCodeServer.OperationFailure, vector)
 						data, _tmp = BuildEncryptedMessage(link, data)
 						link['outgoing'][_tmp] = (_tmp, 0, data)
+						print('lock beyond size')
 						continue
-
-					if value == 0:
-						value = lid
-					else:
-						value = struct.pack('>I', value)
-					
+						
 					mm.seek(offset)
-					oldval = mm.read(4)
+					cval = struct.unpack('>I', mm.read(4))[0]
+					cref = struct.unpack('>I', mm.read(4))[0]
+					_lid = struct.unpack('>I', lid)[0]
 					
-					# if we already own the lock just reply success
-					if oldval == lid:
-						data = struct.pack('>B', PktCodeServer.BlockLockSuccess)
-						data, _tmp = BuildEncryptedMessage(link, data)
-						link['outgoing'][_tmp] = (_tmp, 0, data)
-						continue
-						
-					# if nobody owns the lock then lock it
-					if oldval == b'\x00\x00\x00\x00':
-						# take lock
+					# check if we own the lock, or if nobody owns it
+					if cval == _lid or cval == 0:
 						mm.seek(offset)
-						mm.write(value)
-						# create automatic unlock entry
-						link['locks'].append(offset)
-						# send reply packet
-						data = struct.pack('>B', PktCodeServer.BlockLockSuccess)
+						mm.write(lid)
+						mm.write(struct.pack('>I', cref + 1))
+						# reply success
+						data = struct.pack('>BQ', PktCodeServer.BlockLockSuccess, vector)
 						data, _tmp = BuildEncryptedMessage(link, data)
 						link['outgoing'][_tmp] = (_tmp, 0, data)
 						continue
-						
+					
+					print('someone else holds lock')
 					# somebody else owned the lock
-					data = struct.pack('>B', PktCodeServer.BlockLockFailed)
+					data = struct.pack('>BQ', PktCodeServer.BlockLockFailed, vector)
 					data, _tmp = BuildEncryptedMessage(link, data)
 					link['outgoing'][_tmp] = (_tmp, 0, data)					
 					continue

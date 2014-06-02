@@ -19,6 +19,10 @@ from ClientExceptions import *
 
 from misc import *
 	
+'''
+	@group:				client-internal
+	@sdescription:		This is a structure representing a write hold.
+'''
 class WriteHold:
 	def __init__(self, offset, data, id, vector):
 		self.offset = offset
@@ -27,12 +31,17 @@ class WriteHold:
 		self.vector = vector
 	
 '''
-	This will create a client object and provide access to the remote block.
+	@group:				classes
+	@sdescription:		This will create a client object and provide access to the remote block.
 '''
 class Client(interface.StandardClient):
 	class NoLinkException(Exception):
 		pass
 
+	'''
+		@sdescription:		This is the initializer for the Client class. You must
+		@+:					provide the arguments like: `client = Client('kmcg3413.net'. 1874, 'myblockid')`.
+	'''
 	def __init__(self, rip, rport, bid):
 		sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 		
@@ -85,14 +94,21 @@ class Client(interface.StandardClient):
 		self.trans_idgen = IDGen(4)
 		self.trans_depth = 0
 	
+	'''
+		@sdescription:		Will start a transaction session. All writes will be made
+		@+:					holding writes meaning they will not happen on the server
+		@+:					until TransactionCommit is called. Will flush cache before
+		@+:					returning to ensure all writes have been made in preparation
+		@+:					for the transaction. It will not flush cache is this is a
+		@+:					nested transaction (transaction inside transaction).
+	'''
 	def TransactionStart(self):
 		if self.trans_curid is None:
 			# go ahead and flush anything that is dirty
-			#self.CacheFlush()
+			self.CacheFlush()
 			pass
 		# this is used for __TransactionRestore
 		self.trans_stack.append((self.cache_autodropandflush, self.linkdropthrowexception, self.trans_curid))
-		
 		self.trans_curid = struct.unpack('>I', self.trans_idgen.ugen())[0]
 		
 		# set these like we need them for a transaction; we dont
@@ -105,24 +121,33 @@ class Client(interface.StandardClient):
 		
 		return self.trans_curid
 		
+	'''
+		@sdescription:		Will abort a transaction and restore local cache
+		@+:					to an untainted state.
+	'''
 	def TransactionDrop(self):
 		self.trans_depth = self.trans_depth - 1
 		# drop the cache because it is dirtied with the
 		# write holds that we are not going to execute
+		# on the server which would leave it in a inconsistent
+		# state when the transaction is restarted (if desired)
 		self.CacheDrop()
 		# instead of executing with commit we just drop the
 		# write holds and consider them never being done
 		self.FlushWriteHold()
 		# restore previous values
 		self.__TransactionRestore()
-		
+	
 	def __TransactionRestore(self):
 		# restore stuff
 		res = self.trans_stack.pop()
 		self.cache_autodropandflush = res[0]
 		self.linkdropthrowexception = res[1]
 		self.trans_curid = res[2]
-		
+	'''
+		@sdescription:		Will execute write holds, and will leave local cache
+		@+:					in it's current state which should hold all the writes.
+	'''
 	def TransactionCommit(self):
 		self.trans_depth = self.trans_depth - 1
 		# drop cache because everything should be in write holding state
@@ -134,16 +159,30 @@ class Client(interface.StandardClient):
 		# restore previous values
 		self.__TransactionRestore()
 	
+	'''
+		@sdescription:		Will toggle the cache automatically flushing old
+		@+:					dirtied pages back to the server. This is called
+		@+:					by TransactionStart to prevent automatic flushing
+		@+:					of the cache to the server.
+	'''
 	def SetCacheAutoDropAndFlush(self, value):
 		self.cache_autodropandflush = value
 	
+	'''
+		@sdescription:		This will cause link failures to throw an exception
+		@+:					which will allow a transaction to be aborted.
+	'''
 	def SetLinkDropThrowException(self, value):
 		self.linkdropthrowexception = value
 	
+	'''
+		@sdescription:		A handler which is called during a link failure.
+	'''
 	def SetLinkDropHandler(self, handler):
 		self.linkdrophandler = handler
 
 	'''
+		@group:				shutdown
 		@sdescription:		Ensures all outgoing packets have been sent
 		@+:					and recieved by the remote end. Also flushes
 		@+:					cache to remote.
@@ -156,14 +195,21 @@ class Client(interface.StandardClient):
 			self.HandlePackets()
 			time.sleep(0.2)
 	'''
-		@sdescription:		Drop all cache and DO NOT commit any.
+		@group:				cache
+		@sdescription:		Drop all cache and DO NOT commit any. To commit the cache
+		@+:					use CacheFlush.
 	'''
 	def CacheDrop(self):
 		self.cache = {}
 		self.cache_dirty = []
 		self.cache_lastread = {}
 		self.cache_lastwrite = {}
-		
+	
+	'''
+		@group:				cache
+		@sdescription:		Will commit the cache to the server. To drop without
+		@+:					commiting to server use CacheDrop.
+	'''
 	def CacheFlush(self):
 		# go through all our dirty pages
 		for page in self.cache_dirty:
@@ -173,6 +219,12 @@ class Client(interface.StandardClient):
 			print('flushed cache page %x to server' % page)
 		return 
 	
+	'''
+		@group:				cache
+		@sdescription:		Determine if we have too many cache pages, and we
+		@+:					need to flush some to the server to get back under
+		@+:					the limit.
+	'''
 	def CacheTick(self):
 		if self.cache_autodropandflush is False:
 			return 
@@ -207,7 +259,10 @@ class Client(interface.StandardClient):
 				del self.cache_lastread[oldpage]
 			if oldpage in self.cache_lastwrite:
 				del self.cache_lastwrite[oldpage]
-		
+	'''
+		@group:				cache
+		@sdescription:		Read from the cache lines.
+	'''
 	def CacheRead(self, offset, length):
 		assert(length > 0)
 		assert(offset > -1)
@@ -267,7 +322,10 @@ class Client(interface.StandardClient):
 		out = b''.join(out)
 		assert(len(out) == length)
 		return out
-	
+	'''
+		@group:				cache
+		@sdescription:		Writes to the cache lines.
+	'''
 	def CacheWrite(self, offset, data, wt = False):
 		cache = self.cache
 		
@@ -318,6 +376,11 @@ class Client(interface.StandardClient):
 			offset = offset + lsize
 			page = offset & ~0x3ff
 
+	'''
+		@group:				write-hold
+		@sdescription:		Get the write hold count on the server for the
+		@+:					specified ID.
+	'''
 	def GetWriteHoldCount(self, id = None):
 		self.DoBlockingLinkSetup()
 
@@ -339,7 +402,11 @@ class Client(interface.StandardClient):
 			raise OperationException()
 		
 		return ret
-		
+	'''
+		@group:			write-hold
+		@sdescription:	Tell the server to drop the write holds for the
+		@+:				specified ID.
+	'''
 	def FlushWriteHold(self, id = None, block = False, discard = True, ticknet = False):
 		if id is None:
 			# see if transaction is currently on-going
@@ -373,6 +440,10 @@ class Client(interface.StandardClient):
 			raise OperationException()
 		return ret
 		
+	'''
+		@group:			write-hold
+		@sdescription:	Execute the write holds for the specified ID on the server.
+	'''
 	def DoWriteHold(self, block = False, discard = True, verify = True, ticknet = False, id = None):
 		self.DoBlockingLinkSetup()
 		
@@ -496,7 +567,11 @@ class Client(interface.StandardClient):
 		if block and ret is None:
 			raise OperationException()
 		return ret
-		
+	'''
+		@group:			write-hold
+		@sdescription:	Loads a write hold onto the server using the current
+		@+:				transaction ID, or zero is no transaction is current.
+	'''
 	def WriteHold(self, offset, data, block = False, discard = True, ticknet = False, wt = True, holdput = True):
 		return self.Write(offset, data, block = block, hold = True, discard = discard, ticknet = ticknet, wt = wt, holdput = holdput)
 	
@@ -511,7 +586,12 @@ class Client(interface.StandardClient):
 				if	(_s >= s and _s <= e) or (_e >= s and _e <= e) or (s >= _s and s <= _e) or (e >= _s and e <= _e):
 					print('		f:%s l:%s offset:%x length:%x' % (dbg[0], dbg[1], s, length))
 			return True
-					
+	
+	'''
+		@group:			data
+		@sdescription:	Executes the write on the server immediantly, unless an transaction
+		@+:				is active then it is executed as a write hold.
+	'''
 	def Write(self, offset, data,  block = False, hold = False, discard = True, cache = True, wt = True, ticknet = False, holdput = True):
 		# track who called us and the write data
 		#self.wdbg
@@ -610,9 +690,6 @@ class Client(interface.StandardClient):
 			raise OperationException()
 		return ret
 	
-	'''
-		@sdescription:		DISABLED
-	'''
 	def WriteAddLoop(self, offset, jump, count, data, block = True, discard = True, ticknet = False):
 		self.DoBlockingLinkSetup()
 			
@@ -636,6 +713,7 @@ class Client(interface.StandardClient):
 		return ret
 
 	'''
+		@group:					data
 		@sdescription:			This will copy data in the remote block.
 		@ldescription:			This is much faster because it data is never transferred. To
 		@+:					    get the same effect you could use a read and then write but
@@ -676,6 +754,7 @@ class Client(interface.StandardClient):
 		return ret
 		
 	'''
+		@group:					data
 		@sdescription:			This will read data from the remote block.
 		@param.offset:			source byte address
 		@param.length:			length in bytes
@@ -713,6 +792,10 @@ class Client(interface.StandardClient):
 			raise OperationException()
 		return ret	
 	
+	'''
+		@group:			data
+		@sdescription:	This will perform an atomic exhange on the server immediantly.
+	'''
 	def Exchange8(self, offset, newval):
 		self.DoBlockingLinkSetup()
 		
@@ -726,7 +809,11 @@ class Client(interface.StandardClient):
 		if block and ret is False:
 			raise OperationException()
 		return ret
-		
+	
+	'''
+		@group:			locking
+		@sdescription:	Establishes a auto-write on link drop/failure.
+	'''
 	def BlockLock(self, offset, value = 0):
 		self.DoBlockingLinkSetup()
 		
@@ -734,10 +821,14 @@ class Client(interface.StandardClient):
 		data, vector = BuildEncryptedMessage(self.link, _data)
 		self.outgoing[vector] = (vector, 0, data, self.crypter, _data)
 		
+		print('blocking for result')
 		# always block on this call and return result
 		ret = self.HandlePackets(getvector = vector)
 		return ret
-		
+	
+	'''
+		@sdescription:	Will remove an auto-write on link drop/failure.
+	'''
 	def BlockUnlock(self, offset, block = True):
 		self.DoBlockingLinkSetup()
 	
@@ -753,7 +844,9 @@ class Client(interface.StandardClient):
 			return ret
 		# if not-blocking just return success
 		return True
-		
+	'''
+		@sdescription:	Will return the total size of the remote block on the server in bytes.
+	'''
 	def GetBlockSize(self, block = True):
 		self.DoBlockingLinkSetup()
 		
@@ -767,12 +860,21 @@ class Client(interface.StandardClient):
 		if block and ret is False:
 			raise OperationException()
 		return ret
-		
+	'''
+		@sdescription:	The minimum amount of time to wait until relinking is aborted.
+	'''
 	def SetCommunicationExceptionTime(self, timeout):
 		self.commexctimeout = timeout
+	
+	'''
+		@sdescription:	The minimum amount of time to consider a link dead.
+	'''
 	def SetRelinkTimeout(self, timeout):
 		self.relinkafter = timeout
-		
+	
+	'''
+		@sdescription:	Will attempt to relink. Will not return until link is established.
+	'''
 	def DoBlockingLinkSetup(self):
 		ts = time.time()
 		
@@ -797,12 +899,23 @@ class Client(interface.StandardClient):
 				# if commexctimeout is enabled and the time specified has elapsed
 				if self.commexctimeout is not None and time.time() - ts > self.commexctimeout:
 					raise CommunicationException()
+					
+	'''
+		@sdescription:	Get the count of outstanding packets. A packet is outstanding if
+		@+:				the server has not ackowledged it.
+	'''
 	def GetOutstandingCount(self):
 		return len(self.outgoing)
+	
 	def SetVectorExecutedWarningLimit(self, limit):
 		self.vexecwarnlimit = limit
 	def GetVectorExecutedWarningLimit(self):
 		return self.vexecwarnlimit
+		
+	'''
+		@sdescription:	Will handle reading any incoming packets, and sending (or re-sending)
+		@+:				any packets in the outgoing queue.
+	'''
 	def HandlePackets(self, getvector = None, handlerelink = True, timeout = None):
 		ter = time.time()
 		
@@ -1013,6 +1126,9 @@ class Client(interface.StandardClient):
 				break
 		return
 	
+	'''
+		@sdescription:	Will process an **unencrypted packet**.
+	'''
 	def HandlePacket(self, data, getvector = None):
 		type = data[0]
 		data = data[1:]
@@ -1104,17 +1220,22 @@ class Client(interface.StandardClient):
 					return (False, vector, True)
 				return (False, vector, False)
 		elif	type == PktCodeServer.BlockLockSuccess:
-				vector, offset, length = struct.unpack_from('>QQQ', data)
+				vector = struct.unpack_from('>Q', data)[0]
 				if vector == getvector:
 					return (True, vector, True)
 				return (True, vector, False)
+		elif 	type == PktCodeServer.BlockLockFailed:
+				vector = struct.unpack_from('>Q', data)[0]
+				if vector == getvector:
+					return (False, vector, True)
+				return (False, vector, False)
 		elif	type == PktCodeServer.BlockUnlockFailed:
 				vector, offset, force = struct.unpack_from('>QQB', data)
 				if vector == getvector:
 					return (False, vector, True)
 				return (False, vector, False)
 		elif	type == PktCodeServer.BlockUnlockSuccess:
-				vector, offset, force = struct.unpack_from('>QQB', data)
+				vector, offset = struct.unpack_from('>QQ', data)
 				if vector == getvector:
 					return (True, vector, True)
 				return (True, vector, False)
@@ -1152,13 +1273,8 @@ class Client(interface.StandardClient):
 		self.outgoing[vector] = (vector, 0, data, self.crypter, _data)
 
 	'''
-		This will attempt to verify that indeed the cache is working
-		correctly. On each iteration it generates a random length 
-		string of data and writes it to a random offset. It then
-		reads the string back. This mainly tests writes and reads
-		across cache boundaries, and ensures that the cache code
-		handles these boundaries. If that code is changed this test
-		needs to be run to verify that the code still works correctly.
+		@sdescription:	Warning: This function will corrupt any data on the block target. This is
+		@+:				used to test the local cache algorithms, but will also write to the server.
 	'''
 	def UnitTestCache(self):
 		bsz = self.GetBlockSize()
@@ -1215,9 +1331,12 @@ class Client(interface.StandardClient):
 			writes.append((off, len(data)))
 		# execution will never reach here
 		return True
-		
+
+'''
+	@sdescription:		The standard entry point if this Python module is
+	@+:					called directly from the command line.
+'''
 def doClient(rhost, bid):
-	# 192.168.1.120
 	client = Client(rhost, 1874, bytes(bid, 'utf8'))
 	
 	#client.Read(0, 8)
@@ -1226,11 +1345,11 @@ def doClient(rhost, bid):
 	
 	cs = ChunkPushPullSystem(client, load = False)
 	cs.Format()
-	
-	cs.UnitTest()
-	exit()
+	#cs.UnitTest()
+	#exit()
 	
 	fs = SimpleFS(cs)
+	fs.Format(forcelock = True)
 	fs.UnitTest()
 	
 	client.Finish()

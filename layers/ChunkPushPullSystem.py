@@ -27,13 +27,16 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 			self.levels = 28
 			self.base = 4096
 			self.bucketmaxslots = int((self.base - 10) / 8)
-		
+	
 	def Load(self):
 		levels, doffset, base = struct.unpack('>IQQ', client.Read(100, 4 + 8 * 2))
 		self.levels = levels
 		self.base = base
 		self.doffset = doffset
-		
+	
+	'''
+		@sdescription:	Will return True if the block has been formatted for this system.
+	'''
 	def IsFormatted(self):
 		client = self.client
 		
@@ -42,7 +45,11 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 		if seg == b'cppscpps':
 			return True
 		return False
-		
+	
+	'''
+		@sdescription:	Will format the chunk using the specified base size. (WARNING: base size changing
+		@+:				is not support at the moment)
+	'''
 	def Format(self, csize = 4096):
 		client = self.client
 	
@@ -183,7 +190,14 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 			client.HandlePackets()
 		return
 		
-	
+	'''
+		@sdescription:		Will allocate a series of chunks of possibly varying sizes, which
+		@+:					shall be a total length specified. The `initialsub` specifies how
+		@+:					many bytes must be compensated for in the first chunk. The `repeatsub`
+		@+:					specifies how many bytes are reserved in each chunk except the first
+		@+:					chunk. These two parameters are used to reserve space for one master
+		@+:					header and subsequent headers for each chunk other than the first.
+	'''
 	def AllocChunksForSegment(self, seglength, initialsub = 0, repeatsub = 0):
 		client = self.client
 		while True:
@@ -264,11 +278,17 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 		client.Write(boff + 10 + top * 8, struct.pack('>Q', page))
 		client.Write(boff, struct.pack('>QH', next, top + 1))
 		return True
-		
+	
+	'''
+		@sdescription:		Will push a chunk into the correct level based on it's size.
+	'''
 	def PushChunkBySize(self, sz, chunk):
 		level = (sz / self.base) - 1
 		return self.PushChunk(level, chunk)
-		
+	
+	'''
+		@sdescription:		Will push a chunk into the specified level.
+	'''
 	def PushChunk(self, level, chunk, nonewtrans = False):
 		while True:
 			try:
@@ -324,6 +344,9 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 		self.PushChunk(level, chunk, nonewtrans = True)
 		return True
 	
+	'''
+		@sdescription:	Will pull a chunk from the specified level.
+	'''
 	def PullChunk(self, level = 0, nonewtrans = False):
 		slackpages = []
 		
@@ -377,6 +400,9 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 		chunk = struct.unpack('>Q', client.Read(boff + 10 + (top - 1) * 8, 8))[0]
 		client.Write(boff, struct.pack('>QH', next, top - 1))
 		return chunk
-		
+	
+	'''
+		@sdescription:	Will get the client associated with this layer.
+	'''
 	def GetClient(self):
 		return self.client
