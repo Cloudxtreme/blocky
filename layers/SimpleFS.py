@@ -75,17 +75,20 @@ class SimpleFS(layers.interface.BasicFS):
 		next, prev, nchunk, csize, dlen, nlen = struct.unpack('>QQQQQH', client.Read(foff, 8 * 5 + 2))
 		# set next for our prev
 		if prev != 0:
-			client.Write(prev, struct.pack('>Q', next))
+			client.WriteHold(prev, struct.pack('>Q', next))
 		# set prev for our next
 		if next != 0:
-			client.Write(next + 8, struct.pack('>Q', prev))
+			client.WriteHold(next + 8, struct.pack('>Q', prev))
 		# set root if needs to be changed
 		if foff == root:
 			# set to prev if exists or next
 			if prev != 0:
-				client.Write(self.metabase, struct.pack('>Q', prev))
+				client.WriteHold(self.metabase, struct.pack('>Q', prev))
 			else:
-				client.Write(self.metabase, struct.pack('>Q', next))
+				client.WriteHold(self.metabase, struct.pack('>Q', next))
+	
+		# if we have problems just try to remove again next time
+		client.DoWriteHold()
 		
 		# now free pages used
 		cur = foff

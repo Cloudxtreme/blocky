@@ -87,7 +87,7 @@ def server(lip, lport):
 		the server with ctrl+c this kinda makes that possible by giving
 		enough time to complete the writes then exit.
 	'''
-	signal.signal(signal.SIGINT, HandleSIGINT)
+	#signal.signal(signal.SIGINT, HandleSIGINT)
 	
 	if os.path.exists('id_rsa') and os.path.exists('id_rsa.pub'):
 		# use external key (from ssh-keygen)
@@ -317,6 +317,7 @@ def server(lip, lport):
 		
 		if time.time() - wtlr > 5:
 			print('longest-wait:%s' % hdt)
+			hdt = 0
 		
 			pcd = time.time() - pcst
 			pcst = time.time()
@@ -607,7 +608,7 @@ def server(lip, lport):
 						continue
 					
 					# prevent DoS by limiting the number of write holds
-					if len(link['wholds']) > 50:
+					if len(link['wholds']) > 1000:
 						data = struct.pack('>BQ', PktCodeServer.OperationFailure, vector)
 						data, _tmp = BuildEncryptedMessage(link, data)
 						link['outgoing'][_tmp] = (_tmp, 0, data)
@@ -632,6 +633,8 @@ def server(lip, lport):
 						link['wholds'].remove(hold)
 					_toremove = None
 					
+					print('flushed write hold for id:%x' % id)
+					
 					data = struct.pack('>BQ', PktCodeServer.FlushWriteHold, vector)
 					data, _tmp = BuildEncryptedMessage(link, data)
 					link['outgoing'][_tmp] = (_tmp, 0, data)
@@ -655,6 +658,9 @@ def server(lip, lport):
 					# all these writes need to happen, or else we fail
 					# our contract with the client and risk their data
 					# being in a corrupt state
+					
+					print('doing write hold for id:%x all-count:%s' % (id, len(link['wholds'])))
+					
 					CriticalEnter()
 					_toremove = []
 					for hold in link['wholds']:
@@ -662,11 +668,16 @@ def server(lip, lport):
 							mm.seek(hold[0])
 							mm.write(hold[1])
 							_toremove.append(hold)
+						else:
+							print('cur-id:%x    hold[2]:%x' % (id, hold[2]))
 					# clear write holds matching the ID
 					for hold in _toremove:
 						link['wholds'].remove(hold)
 					_toremove = None
 					CriticalExit()
+					
+					#print('holds:%s' % link['wholds'])
+					print('		all-count:%s' % (len(link['wholds'])))
 					
 					data = struct.pack('>BQQH', PktCodeServer.WriteSuccess, vector, 0, 0)
 					data, _tmp = BuildEncryptedMessage(link, data)

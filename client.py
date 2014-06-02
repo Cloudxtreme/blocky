@@ -71,30 +71,35 @@ class Client(interface.StandardClient):
 		
 		# set the defaults
 		self.SetCommunicationExceptionTime(60 * 15)
-		self.SetRelinkTimeout(60 * 5)
+		self.SetRelinkTimeout(35)
 		
 		self.trans_stack = []
 		self.trans_curid = None
 		self.trans_idgen = IDGen(4)
+		self.trans_depth = 0
 	
 	def TransactionStart(self):
 		if self.trans_curid is None:
 			# go ahead and flush anything that is dirty
-			self.CacheFlush()
+			#self.CacheFlush()
+			pass
+		# this is used for __TransactionRestore
+		self.trans_stack.append((self.cache_autodropandflush, self.linkdropthrowexception, self.trans_curid))
 		
 		self.trans_curid = struct.unpack('>I', self.trans_idgen.ugen())[0]
 		
-		# this is used for __TransactionRestore
-		self.trans_stack.append((self.cache_autodropandflush, self.linkdropthrowexception, self.trans_curid))
 		# set these like we need them for a transaction; we dont
 		# want cache being written and we want an exception thrown
 		# if the link fails so we can abort the transaction
 		self.cache_autodropandflush = False
 		self.linkdropthrowexception = True
 		
+		self.trans_depth = self.trans_depth + 1
+		
 		return self.trans_curid
 		
 	def TransactionDrop(self):
+		self.trans_depth = self.trans_depth - 1
 		# drop the cache because it is dirtied with the
 		# write holds that we are not going to execute
 		self.CacheDrop()
@@ -112,6 +117,7 @@ class Client(interface.StandardClient):
 		self.trans_curid = res[2]
 		
 	def TransactionCommit(self):
+		self.trans_depth = self.trans_depth - 1
 		# drop cache because everything should be in write holding state
 		# (i have changed this since if we execute write hold with success
 		#  then the remote server should match our cache)
@@ -227,7 +233,7 @@ class Client(interface.StandardClient):
 				else:
 					psz = 1024
 				cache[page] = self.Read(page, psz, block = True, cache = False)
-				print('loading page:%x from cache' % page)
+				#print('loading page:%x from cache' % page)
 				#print('loading page:%x' % page)
 				assert(len(cache[page]) == psz)
 				#print('[read] cache page:%x length:%x' % (page, len(cache[page])))
@@ -326,7 +332,7 @@ class Client(interface.StandardClient):
 		
 		return ret
 		
-	def FlushWriteHold(self, id = None):
+	def FlushWriteHold(self, id = None, block = False, discard = True, ticknet = False):
 		if id is None:
 			# see if transaction is currently on-going
 			# and if so use that ID, otherwise use the
@@ -340,12 +346,26 @@ class Client(interface.StandardClient):
 		data, vector = BuildEncryptedMessage(self.link, _data)
 		self.outgoing[vector] = (vector, 0, data, self.crypter, _data)
 		
+		if discard is False and block is False:
+			# discard the write reply when it arrives
+			self.vexecuted[vector] = True
+
+		#if discard is False and block is False:
+		#	print('warning')
+			
+		if block is False and ticknet is False:
+			return None
+		
+		if block is False:
+			vector = None
+		# block for this specific vector
 		ret = self.HandlePackets(getvector = vector)
-		if ret is None:
+		
+		if block and ret is None:
 			raise OperationException()
 		return ret
-
-	def DoWriteHold(self, block = False, discard = True, verify = False, ticknet = False, id = None):
+		
+	def DoWriteHold(self, block = False, discard = True, verify = True, ticknet = False, id = None):
 		self.DoBlockingLinkSetup()
 		
 		if id is None:
@@ -357,24 +377,49 @@ class Client(interface.StandardClient):
 			else:
 				id = 0
 
-		# verify will ensure the writes are all there
-		# by checking the count and if not correct updatin
-		# the flushing then updating the writes
+		# we need to make sure all the writes for this hold
+		# have arrived at the server... first let us check
+		# that indeed we have got an acknowledge for them
+		# all from the server
 		if verify:
 			tryagain = True
 			while tryagain:
+				allthere = False
+				while allthere is False:
+					allthere = True
+					for hold in self.wholds:
+						vec = hold[3]
+						if vec not in self.vexecuted or self.vexecuted[vec] == None:
+							allthere = False
+							break
+					if allthere is True:
+						# exit and then verify once again that
+						# they are all there
+						break
+					# let the network tick and get them there
+					self.HandlePackets()
+					# sleep just a little to take some load
+					# off the CPU while we loop here..
+					time.sleep(0)
+				
+				# remove them from vexecuted
+				for hold in self.wholds:
+					vec = hold[3]
+					del self.vexecuted[vec]
+			
 				# get server count of writes on hold to verify they are all there
 				scnt = self.GetWriteHoldCount(id = id)
 				# are all the writes there?
 				if len(self.wholds) != scnt:
-					# flush the ones there if any
-					self.FlushWriteHold(id = id)
+					# flush the ones there if any (wait for response)
+					self.FlushWriteHold(id = id, block = True)
 					# try to re-send them
+					print('resending holds')
 					for hold in self.wholds:
 						# make sure the ID is right
 						if hold[2] == id:
 							# send the write hold
-							self.WriteHold(hold[0], hold[1], hold[2])
+							self.WriteHold(hold[0], hold[1], block = True)
 					# re-check they are all there
 					# (loop again)
 				else:
@@ -386,7 +431,13 @@ class Client(interface.StandardClient):
 		self.outgoing[vector] = (vector, 0, data, self.crypter, _data)
 
 		# flush the write holds on our side
-		self.wholds = []
+		_toremove = []
+		for hold in self.wholds:
+			if hold[2] == id:
+				_toremove.append(hold)
+		for hold in _toremove:
+			self.wholds.remove(hold)
+		_toremove = None
 		
 		if discard is False and block is False:
 			# discard the write reply when it arrives
@@ -408,8 +459,6 @@ class Client(interface.StandardClient):
 		return ret
 		
 	def WriteHold(self, offset, data, block = False, discard = True, ticknet = False, wt = True):
-		self.wholds.append((offset, data))
-		
 		return self.Write(offset, data, block = block, hold = True, discard = discard, ticknet = ticknet, wt = wt)
 	
 	if __debug__:
@@ -460,17 +509,24 @@ class Client(interface.StandardClient):
 		
 		# force any writes to be held if inside a
 		# transaction block
+		id = 0
 		if hold or self.trans_curid is not None:
 			# see if transaction is currently on-going
 			# and if so use that ID, otherwise use the
 			# default id of zero
-			if self.trans_curid != None:
+			if self.trans_curid is not None:
 				id = self.trans_curid
-			else:
-				id = 0
 			code = PktCodeClient.WriteHold
 			_data = struct.pack('>BQI', code, offset, id) + data
+			
+			# disable this so it does not overwrite ours
+			discard = True
+			# set the catch to add the write hold to our
+			# internal list and also be able to record
+			# the vector used
+			catchforhold = True
 		else:
+			catchforhold = False
 			code = PktCodeClient.Write
 			_data = struct.pack('>BQ', code, offset) + data
 	
@@ -485,6 +541,13 @@ class Client(interface.StandardClient):
 		# <message> was built up at top of this method
 		data, vector = BuildEncryptedMessage(self.link, _data)
 		self.outgoing[vector] = (vector, 0, data, self.crypter, _data)
+		
+		if catchforhold:
+			# we want to add it to our internal list of holds
+			# and also catch the result so we know that it
+			# made it to the server
+			self.wholds.append((offset, data, id, vector))
+			self.vexecuted[vector] = None
 		
 		# does not make sense to discard and block (will just fil up vexecuted)
 		if discard is not True and block is False:
@@ -766,8 +829,8 @@ class Client(interface.StandardClient):
 					try:
 						self.sock.send(out[2])
 					except Exception as e:
-						print('WARNING: socket exception')
-						traceback.print_exc(file = sys.stdout)
+						#print('WARNING: socket exception')
+						#traceback.print_exc(file = sys.stdout)
 						continue
 					# update time last sent
 					outgoing[out[0]] = (out[0], ct, out[2], out[3], out[4])
@@ -787,7 +850,10 @@ class Client(interface.StandardClient):
 			# after so long AND we have not recieved a message
 			# AND we are supposed to handle the relink then attempt
 			# to relink
+			#print('handlerelink:%s a:%s b:%s relinkafter:%s' % (handlerelink, ct - self.lmst, ct - self.lmt, self.relinkafter))
+			#print('handlerelink:%s' % handlerelink)
 			if handlerelink and len(self.outgoing) > 0 and ct - self.lmst > self.relinkafter and ct - self.lmt > self.relinkafter:
+				print('communications timeout')
 				# okay link is considered bad, try to setup a link again
 				if self.linkdrophandler is not None:
 					# this can throw and exception if it desired to do so
@@ -814,8 +880,6 @@ class Client(interface.StandardClient):
 			while True:
 				try:
 					data, addr = self.sock.recvfrom(4096)
-					# record last time we recieved a message
-					self.lmt = time.time()		
 				except Exception as e:
 					break
 				encrypted, data, svector = ProcessRawSocketMessage(self.link, data)
@@ -841,14 +905,14 @@ class Client(interface.StandardClient):
 					# continue processing packet
 					try:
 						ret, vector, match = self.HandlePacket(data, getvector = getvector)
-					except Client.NoLinkException as e:
-						# decided not to handle nolink packets
-						#if handlerelink:
-						#	self.linkvalid = False
-						#	self.DoBlockingLinkSetup()
-						#	continue
-						# we have been called by DoBlockingLinkSetup for handlerelink to be False
-						return
+						# record last time we recieved a non-nolink message
+						self.lmt = time.time()		
+					except Client.NoLinkException:
+						# at this point we were either blocking for a specific
+						# packet, or we were just ticking the net in any case
+						# just break out and let 
+						print('no link so exiting loop')
+						break
 					
 					if match is None:
 						# unknown packet
@@ -872,7 +936,7 @@ class Client(interface.StandardClient):
 							# just throw the result/reply away
 							if vector in self.vexecuted:
 								# do not discard results, but store them
-								print('added to vexecuted for vector:%s' % vector)
+								#print('added to vexecuted for vector:%s' % vector)
 								#print(ret)
 								#raise Exception('LOL')
 								self.vexecuted[vector] = ret
@@ -1105,49 +1169,11 @@ def doClient(rhost, bid):
 	
 	client.Finish()
 	
-'''
-key = IDGen.gen(512)
-m = SymCrypt(key)
-st = time.time()
-z = 0
-
-#o = IDGen.gen(1500)
-o = b'hello world ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-
-print(key[0:len(o)])
-
-c = m.crypt(o)
-
-print(c)
-p = m.decrypt(c)
-print(p)
-if p != o:
-	print('FAILED')
-	exit()
-
-z = z + 1
-if z > 50:
-	z = 0
-	print('ps', (time.time() - st) / (x + 1))
-exit()
-'''
-
 # if main module then execute main routine
 if __name__ == '__main__':
-	print('Blocky Standard Client')
-	print('Leonard Kevin McGuire Jr. 2014')
-	print()
-	print('WARNING: THIS SOFTWARE IS ALPHA!')
-	print()
-	
-	if len(sys.argv) < 3:
-		print('Not Enough Arguments')
-		print('<remote-host> <remote-block-id>')
-		exit()
-		
+	print('Blocky Client Unit Test Suite')
 	doClient(sys.argv[1], sys.argv[2])
-	
-	# multiple client test
-	#for x in range(0, 1):
-	#	t = threading.Thread(target = doClient)
-	#	t.start()
+
+
+
+

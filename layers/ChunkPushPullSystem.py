@@ -3,6 +3,8 @@ import struct
 import random
 import time
 
+from ClientExceptions import *
+
 class ChunkPushPullSystem(layers.interface.ChunkSystem):
 	ChunkFree 		= 1
 	ChunkBegin		= 2
@@ -183,15 +185,26 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 		
 	
 	def AllocChunksForSegment(self, seglength, initialsub = 0, repeatsub = 0):
-		chunks = []
-		if self.__AllocChunksForSegment(seglength, self.levels - 1, chunks, initialsub = initialsub, repeatsub = repeatsub) is False:
-			# push all the chunks we did get back..
-			for chunk in chunks:
-				# push chunk back into specified level
-				self.PushChunk(chunk[2], chunk[0])
-			return None
-		# we should have enough chunks for the segment
-		return chunks
+		client = self.client
+		while True:
+			try:
+				client.TransactionStart()
+				chunks = []
+				if self.__AllocChunksForSegment(seglength, self.levels - 1, chunks, initialsub = initialsub, repeatsub = repeatsub) is False:
+					# push all the chunks we did get back..
+					for chunk in chunks:
+						# push chunk back into specified level
+						self.PushChunk(chunk[2], chunk[0], nonewtrans = True)
+					client.TransactionCommit()
+					return None
+				# we should have enough chunks for the segment
+				client.TransactionCommit()
+				return chunks
+			except LinkDropException:
+				print('LINKDROP')
+				client.TransactionDrop()
+				continue
+			break
 		
 	def __AllocChunksForSegment(self, seglength, level, chunks, initialsub, repeatsub):
 		if level < 0:
@@ -213,7 +226,7 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 			cnt = cnt + 1
 		# try to allocate them
 		for x in range(0, cnt):
-			chunk = self.PullChunk(level)
+			chunk = self.PullChunk(level, nonewtrans = True)
 			if chunk is None:
 				#print('none left in level:%s so going lower' % level)
 				# no chunks left, try lower level
@@ -232,7 +245,7 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 	
 	def __PushBasePages(self, pages):
 		for page in pages:
-			self.PushBasePage(page)
+			self.__PushBasePage(page)
 		return True
 	
 	def __PushBasePage(self, page):
@@ -244,67 +257,81 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 		if top == self.bucketmaxslots:
 			# create new bucket from one of the pages
 			time.sleep(2)
-			client.WriteHold(page, struct.pack('>QH', boff, 0))
-			client.WriteHold(200 + level * 8, struct.pack('>Q', page))
-			client.DoWriteHold()
+			client.Write(page, struct.pack('>QH', boff, 0))
+			client.Write(200 + level * 8, struct.pack('>Q', page))
 			return True
 		# push a page into the bucket
-		client.WriteHold(boff + 10 + top * 8, struct.pack('>Q', page))
-		client.WriteHold(boff, struct.pack('>QH', next, top + 1))
-		client.DoWriteHold()
+		client.Write(boff + 10 + top * 8, struct.pack('>Q', page))
+		client.Write(boff, struct.pack('>QH', next, top + 1))
 		return True
 		
 	def PushChunkBySize(self, sz, chunk):
 		level = (sz / self.base) - 1
 		return self.PushChunk(level, chunk)
 		
-	def PushChunk(self, level, chunk):
-		try:
-			client = self.client
-			client.TransactionStart()
-			# short-circuit to the specialized function for pages (not chunks)
-			#print('push-chunk level:%s chunk:%x' % (level, chunk))
-			if level == 0:
-				res = self.__PushBasePage(chunk)
-				client.TransactionCommit()
-				return res
-			boff = struct.unpack('>Q', client.Read(int(200 + level * 8), 8))[0]
-			next, top = struct.unpack('>QH', client.Read(boff, 10))
-			if top == self.bucketmaxslots:
-				# create new bucket from ... a page (base page / base chunk)
-				page = self.PullChunk(0)
-				if page is None:
+	def PushChunk(self, level, chunk, nonewtrans = False):
+		while True:
+			try:
+				client = self.client
+				if nonewtrans is False:
+					client.TransactionStart()
+				# short-circuit to the specialized function for pages (not chunks)
+				#print('push-chunk level:%s chunk:%x' % (level, chunk))
+				if level == 0:
+					res = self.__PushBasePage(chunk)
+					if nonewtrans is False:
+						client.TransactionCommit()
+					return res
+				boff = struct.unpack('>Q', client.Read(int(200 + level * 8), 8))[0]
+				next, top = struct.unpack('>QH', client.Read(boff, 10))
+				if top == self.bucketmaxslots:
+					# create new bucket from ... a page (base page / base chunk)
+					page = self.PullChunk(0, nonewtrans = True)
+					if page is None:
+						if nonewtrans is False:
+							client.TransactionCommit()
+						return False
+					client.Write(page, struct.pack('>QH', boff, 0))
+					client.Write(200 + level * 8, struct.pack('>Q', page))
+					next = boff
+					boff = page
+					top = 0
+					
+				# push chunk into bucket
+				client.Write(boff + 10 + top * 8, struct.pack('>Q', chunk))
+				client.Write(boff, struct.pack('>QH', next, top + 1))
+				if nonewtrans is False:
 					client.TransactionCommit()
-					return False
-				client.WriteHold(page, struct.pack('>QH', boff, 0))
-				client.WriteHold(200 + level * 8, struct.pack('>Q', page))
-				next = boff
-				boff = page
-				top = 0
-				
-			# push chunk into bucket
-			client.WriteHold(boff + 10 + top * 8, struct.pack('>Q', chunk))
-			client.WriteHold(boff, struct.pack('>QH', next, top + 1))
-			client.TransactionCommit()
-		except LinkDropException:
-			client.TransactionDrop()
+			except LinkDropException as e:
+				# just re-raise it like we never caught it
+				if nonewtrans is True:
+					raise e
+				client.TransactionDrop()
+				continue
+			break
 		
 	def __FillLevelOnce(self, level):
 		if level + 1 >= self.levels:
 			return False
-		chunk = self.PullChunk(level + 1)
+		chunk = self.PullChunk(level + 1, nonewtrans = True)
 		if chunk is None:
 			# try to fill this level
 			return False
 		# okay we have a chunk from the upper level, now
 		# lets split it and place it into this level
 		#print('broke chunk %x size:%x into %x and %x of size %x' % (chunk, self.base << (level + 1), chunk, chunk + (self.base << level), self.base << level))
-		self.PushChunk(level, chunk + (self.base << level))
-		self.PushChunk(level, chunk)
+		self.PushChunk(level, chunk + (self.base << level), nonewtrans = True)
+		self.PushChunk(level, chunk, nonewtrans = True)
 		return True
 	
-	def PullChunk(self, level = 0):
+	def PullChunk(self, level = 0, nonewtrans = False):
 		slackpages = []
+		
+		if nonewtrans:
+			ret = self.__PullChunk(level, slackpages)
+			self.__PushBasePages(slackpages)
+			return ret
+		
 		while True:
 			try:
 				self.client.TransactionStart()
@@ -341,14 +368,14 @@ class ChunkPushPullSystem(layers.interface.ChunkSystem):
 					#print('			filling level was fale')
 					return None
 				return self.__PullChunk(level, slackpages)
-			client.WriteHold(200 + level * 8, struct.pack('>Q', next))
+			client.Write(200 + level * 8, struct.pack('>Q', next))
 			# store this unused base sized page
 			slackpages.append(boff)
 			# try again..
 			return self.__PullChunk(level, slackpages)
 			
 		chunk = struct.unpack('>Q', client.Read(boff + 10 + (top - 1) * 8, 8))[0]
-		client.WriteHold(boff, struct.pack('>QH', next, top - 1))
+		client.Write(boff, struct.pack('>QH', next, top - 1))
 		return chunk
 		
 	def GetClient(self):

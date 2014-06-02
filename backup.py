@@ -23,8 +23,12 @@ class SimpleBackup:
 		self.path = path		
 
 		self.client = Client(rhost, rport, bytes(bid, 'utf8'))		
+		self.client.SetLinkDropHandler(lambda : SimpleBackup.LinkDrop(self))
 		self.cs = ChunkPushPullSystem(client, load = False)
 		self.ValidCheck()
+		
+	def LinkDrop(self):
+		pass
 		
 	def ValidCheck(self):
 		if self.cs.IsFormatted() is False:
@@ -35,13 +39,16 @@ class SimpleBackup:
 		self.files = None
 		self.lastvalid = 0
 		
+	def TryLock(self):
+		if self.client.fs.TryLock() is False:
+			raise UnableToLockException()
+			
 	def ValidRaise(self):
 		# is the remote block valid?
 		if self.valid is False:
 			raise DifferentFormatException()
 		# try to lock the remote block
-		if self.client.fs.TryLock() is False:
-			raise UnableToLockException()
+		self.TryLock()
 		# ensure listing has been created and recreate the listing
 		# if the last call to one this function is older than
 		# 30 seconds.. meaning we may have been link dropped which
@@ -49,7 +56,7 @@ class SimpleBackup:
 		if self.files is None or time.time() - self.lastvalid > 30:
 			# enumerate file listing
 			self.files = self.EnumerateFiles()
-	
+		
 	def PushFileFromMemory(self, lpath, prefix):
 		self.ValidRaise()
 		
