@@ -1,6 +1,5 @@
 import socket
 import struct
-import pubcrypt
 import random
 import timeit
 import threading
@@ -13,7 +12,8 @@ import mmap
 import pprint
 import signal
 
-from misc import *
+from lib.misc import *
+from lib import pubcrypt
 	
 class TooManyVectorsException(Exception):
 	pass
@@ -233,9 +233,7 @@ def server(lip, lport):
 					print('unlocking locks for link')
 					for lock in link['locks']:
 						mm.seek(lock)
-						if struct.unpack('>Q', mm.read(8)) == struct.pack('>Q', link['ulid']):
-							mm.seek(lock)
-							mm.write(struct.pack('>Q', 0))
+						mm.write(struct.pack('>II', 0, 0))
 				uidgen.urem(e[1])				# free that id to be used again
 				del links[e[0]][e[1]]			# remove from links
 				# also remove addr entry if empty
@@ -812,6 +810,8 @@ def server(lip, lport):
 						if cref == 0:
 							mm.seek(offset)
 							mm.write(struct.pack('>I', 0))
+							print('locks', link['locks'])
+							link['locks'].remove(offset)
 					
 					data = struct.pack('>BQQ', PktCodeServer.BlockUnlockSuccess, vector, offset)
 					data, _tmp = BuildEncryptedMessage(link, data)
@@ -832,6 +832,8 @@ def server(lip, lport):
 					cref = struct.unpack('>I', mm.read(4))[0]
 					_lid = struct.unpack('>I', lid)[0]
 					
+					print('cval:%x cref:%x lid:%x\n' % (cval, cref, _lid))
+					
 					# check if we own the lock, or if nobody owns it
 					if cval == _lid or cval == 0:
 						mm.seek(offset)
@@ -841,6 +843,10 @@ def server(lip, lport):
 						data = struct.pack('>BQ', PktCodeServer.BlockLockSuccess, vector)
 						data, _tmp = BuildEncryptedMessage(link, data)
 						link['outgoing'][_tmp] = (_tmp, 0, data)
+						
+						if cval == 0:
+							if offset not in link['locks']:
+								link['locks'].append(offset)
 						continue
 					
 					print('someone else holds lock')
