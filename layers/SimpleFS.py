@@ -39,10 +39,13 @@ class SimpleFS(layers.interface.BasicFS):
 		if forcelock is False:
 			self.TryLock()
 	
-		# write our signature field
+		print('formatting')
+		# clear signature field at first
 		client.Write(self.metabase, struct.pack('>Q', 0))
-		client.Write(self.metabase + 8, struct.pack('>I', 0))
+		# format cval and cref
+		client.Write(self.metabase + 8, struct.pack('>II', 0, 0))
 		client.Write(16, b'sifssifs')
+		print('formatted')
 		if forcelock is False:
 			self.ReleaseLock()
 		
@@ -481,15 +484,9 @@ class SimpleFS(layers.interface.BasicFS):
 	def UnitTest(self):
 		client = self.client
 		cs = self.cs
-	
-		print('trying to format')
-	
-		self.Format()
 		
 		client.SetCommunicationExceptionTime(45)
 		client.SetRelinkTimeout(15)
-
-		print('done formatting')
 		
 		'''
 		data = IDGen.gen(1024 * 2)
