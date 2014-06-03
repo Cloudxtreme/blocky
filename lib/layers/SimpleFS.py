@@ -1,13 +1,13 @@
-import layers.interface
+import lib.layers.interface
 import struct
 import random
 import inspect
-from misc import *
+from lib.misc import *
 
 class LockFailedException(Exception):
 	pass
 
-class SimpleFS(layers.interface.BasicFS):
+class SimpleFS(lib.layers.interface.BasicFS):
 	def __init__(self, cs):
 		self.cs = cs
 		self.client = cs.GetClient()
@@ -530,7 +530,13 @@ class SimpleFS(layers.interface.BasicFS):
 					fname = file[2]
 					fdata = file[3]
 					#print('verifying:[%s] fsz:%s' % (fname, fsz))
-					_data = self.ReadFile(f, 0, fsz)
+					while True:
+						try:
+							_data = self.ReadFile(f, 0, fsz)
+						except LockFailedException:
+							time.sleep(0.04)
+							continue
+						break
 					if True and _data != fdata:
 						print('OUCH')
 						print('fsz:%s' % fsz)
@@ -551,7 +557,13 @@ class SimpleFS(layers.interface.BasicFS):
 				i = random.randint(0, len(files) - 1)
 				file = files[i]
 				print('deleting index:%s file:[%s]' % (i, file[2]))
-				self.DeleteFile(file[0])
+				while True:
+					try:
+						self.DeleteFile(file[0])
+					except LockFailedException:
+						time.sleep(0.04)
+						continue
+					break
 				_files = []
 				for _file in files:
 					if _file != file:
@@ -565,7 +577,13 @@ class SimpleFS(layers.interface.BasicFS):
 				name = IDGen.gen(4)
 				# random size (between 10 bytes and a little over 1MB)
 				fsz = random.randint(len(name) + 10, len(name) + 1024)
-				f = self.CreateFile(name, fsz)
+				while True:
+					try:
+						f = self.CreateFile(name, fsz)
+					except LockFailedException:
+						time.sleep(0.04)
+						continue
+					break
 				
 				if f is None:
 					continue
@@ -580,7 +598,13 @@ class SimpleFS(layers.interface.BasicFS):
 				if f is not None:
 					afsz = fsz - len(name) - 5
 					data = IDGen.gen(afsz)
-					self.WriteFile(f, 0, data)
+					while True:
+						try:
+							self.WriteFile(f, 0, data)
+						except LockFailedException:
+							time.sleep(0.04)
+							continue
+						break
 					files.append((f, afsz, name, data))
 				else:
 					# we need to delete a file
@@ -589,6 +613,6 @@ class SimpleFS(layers.interface.BasicFS):
 			# end-of-while-loop
 			
 		#cs.TestSegmentAllocationAndFree()
-		list = fs.EnumerateFileList()
-		fs.TruncateFile(list[0][1], 8192)
+		#list = fs.EnumerateFileList()
+		#fs.TruncateFile(list[0][1], 8192)
 		# end-of-function

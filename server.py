@@ -234,6 +234,7 @@ def server(lip, lport):
 					for lock in link['locks']:
 						mm.seek(lock)
 						mm.write(struct.pack('>II', 0, 0))
+						print('		unlocked lock:%x' % lock)
 				uidgen.urem(e[1])				# free that id to be used again
 				del links[e[0]][e[1]]			# remove from links
 				# also remove addr entry if empty

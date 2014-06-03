@@ -1,12 +1,12 @@
 import socket
 import struct
-import pubcrypt
 import random
 import timeit
 import threading
 import os
 import hashlib
 import time
+from lib import pubcrypt
 
 class SymCrypt:
 	def __init__(self, key):

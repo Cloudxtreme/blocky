@@ -1,6 +1,5 @@
 import socket
 import struct
-import pubcrypt
 import random
 import timeit
 import threading
@@ -9,15 +8,16 @@ import sys
 import hashlib
 import time
 import math
-import layers.interface as interface
 import traceback
 import inspect
 
-from layers.SimpleFS import SimpleFS
-from layers.ChunkPushPullSystem import ChunkPushPullSystem
-from ClientExceptions import *
+from lib.layers import interface
+from lib.layers.SimpleFS import SimpleFS
+from lib.layers.ChunkPushPullSystem import ChunkPushPullSystem
+from lib.ClientExceptions import *
+from lib import pubcrypt
 
-from misc import *
+from lib.misc import *
 	
 '''
 	@group:				client-internal
@@ -821,7 +821,6 @@ class Client(interface.StandardClient):
 		data, vector = BuildEncryptedMessage(self.link, _data)
 		self.outgoing[vector] = (vector, 0, data, self.crypter, _data)
 		
-		print('blocking for result')
 		# always block on this call and return result
 		ret = self.HandlePackets(getvector = vector)
 		return ret
@@ -1331,34 +1330,6 @@ class Client(interface.StandardClient):
 			writes.append((off, len(data)))
 		# execution will never reach here
 		return True
-
-'''
-	@sdescription:		The standard entry point if this Python module is
-	@+:					called directly from the command line.
-'''
-def doClient(rhost, bid):
-	client = Client(rhost, 1874, bytes(bid, 'utf8'))
-	
-	#client.Read(0, 8)
-	#client.UnitTestCache()
-	#exit()
-	
-	cs = ChunkPushPullSystem(client, load = False)
-	cs.Format()
-	#cs.UnitTest()
-	#exit()
-	
-	fs = SimpleFS(cs)
-	fs.Format(forcelock = True)
-	fs.UnitTest()
-	
-	client.Finish()
-	
-# if main module then execute main routine
-if __name__ == '__main__':
-	print('Blocky Client Unit Test Suite')
-	doClient(sys.argv[1], sys.argv[2])
-
 
 
 

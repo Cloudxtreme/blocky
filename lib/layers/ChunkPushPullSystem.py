@@ -1,11 +1,11 @@
-import layers.interface
+import lib.layers.interface
 import struct
 import random
 import time
 
-from ClientExceptions import *
+from lib.ClientExceptions import *
 
-class ChunkPushPullSystem(layers.interface.ChunkSystem):
+class ChunkPushPullSystem(lib.layers.interface.ChunkSystem):
 	ChunkFree 		= 1
 	ChunkBegin		= 2
 	ChunkData		= 3

@@ -1,9 +1,9 @@
 import os
 import sys
 import argparse
-from layers.SimpleFS import SimpleFS
-from layers.ChunkPushPullSystem import ChunkPushPullSystem
-from client import Client
+from lib.layers.SimpleFS import SimpleFS
+from lib.layers.ChunkPushPullSystem import ChunkPushPullSystem
+from lib.client import Client
 
 class FileInfo:
 	def __init__(self, ptr, path, length, mtime):
