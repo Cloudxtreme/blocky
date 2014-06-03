@@ -800,18 +800,21 @@ def server(lip, lport):
 					mm.seek(offset)
 					cval = struct.unpack('>I', mm.read(4))[0]
 					cref = struct.unpack('>I', mm.read(4))[0]
-					_lid = struct.unpack('>I', lid)[0]
+					_uid = struct.unpack('>I', uid)[0]
 					
+					#print('unlock: lid:%x cval:%x cref:%x' % (_uid, cval, cref))
 					# check if we own it (if not just dont unlock it)
-					if cval == _lid:
+					if cval == _uid:
 						# decrement ref (if above zero)
 						if cref > 0:
+							#print('	decrementing ref')
 							cref = cref - 1
 							mm.seek(offset + 4)
 							mm.write(struct.pack('>I', cref))
 						
 						# unlock it
 						if cref == 0:
+							#print('	unlocking')
 							mm.seek(offset)
 							mm.write(struct.pack('>I', 0))
 							link['locks'].remove(offset)
@@ -851,23 +854,25 @@ def server(lip, lport):
 					mm.seek(offset)
 					cval = struct.unpack('>I', mm.read(4))[0]
 					cref = struct.unpack('>I', mm.read(4))[0]
-					_lid = struct.unpack('>I', lid)[0]
+					_uid = struct.unpack('>I', uid)[0]
 					
-					#print('cval:%x cref:%x lid:%x' % (cval, cref, _lid))
+					#print('cval:%x cref:%x lid:%x' % (cval, cref, _uid))
+					
+					#print('lock: lid:%x cval:%x cref:%x' % (_uid, cval, cref))
 					
 					# check if we own the lock, or if nobody owns it
-					if cval == _lid or cval == 0:
+					if cval == _uid or cval == 0:
+						#print('	locking')
 						mm.seek(offset)
-						mm.write(lid)
+						mm.write(uid)
 						mm.write(struct.pack('>I', cref + 1))
 						# reply success
 						data = struct.pack('>BQ', PktCodeServer.BlockLockSuccess, vector)
 						data, _tmp = BuildEncryptedMessage(link, data)
 						link['outgoing'][_tmp] = (_tmp, 0, data)
 						
-						if cval == 0:
-							if offset not in link['locks']:
-								link['locks'].append(offset)
+						if offset not in link['locks']:
+							link['locks'].append(offset)
 						continue
 					
 					#print('someone else holds lock')
