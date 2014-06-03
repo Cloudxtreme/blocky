@@ -812,6 +812,24 @@ class Client(interface.StandardClient):
 	
 	'''
 		@group:			locking
+		@sdescription:	Should be called for a lock before BlockLock or BlockUnlock
+		@+:				is called. This will ensure the lock is ready in the event
+		@+:				it has been left locked from a server crash or bug.
+	'''
+	def InitLock(self, offset):
+		self.DoBlockingLinkSetup()
+		
+		_data = struct.pack('>BQ', PktCodeClient.BlockLockInit, offset)
+		data, vector = BuildEncryptedMessage(self.link, _data)
+		self.outgoing[vector] = (vector, 0, data, self.crypter, _data)
+		
+		# always block on this call and return result
+		ret = self.HandlePackets(getvector = vector)
+		return ret
+		
+	
+	'''
+		@group:			locking
 		@sdescription:	Establishes a auto-write on link drop/failure.
 	'''
 	def BlockLock(self, offset, value = 0):

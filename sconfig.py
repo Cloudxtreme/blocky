@@ -5,7 +5,7 @@
 	'public-key-bits':			64,	# the number of bits in the
 									# generated public and private
 									# keys
-	'link-idle-check':		60 * 5,	# the time to wait before checking
+	'link-idle-check':		60,		# the time to wait before checking
 									# for idle links
 	'block-update-check':	60 * 5,	# the time to wait before checking
 									# for updated block meta-data files

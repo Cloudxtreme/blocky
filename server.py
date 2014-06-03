@@ -211,6 +211,8 @@ def server(lip, lport):
 								block['mm'] = None
 								# should be better setting this to zero
 								block['lmt'] = 0
+								# this *needs* to be an empty list
+								block['lockinit'] = []
 								# write updated block info to disk
 								fd = open('block.%s' % bid, 'w')
 								pprint.pprint(block, fd)
@@ -515,7 +517,8 @@ def server(lip, lport):
 										'maxref':	sconfig['block-max-ref'],
 										'lmt':		0,
 										'locks':	{},
-										'mm':		None					
+										'mm':		None,
+										'lockinit':	[],
 								}
 								fd = open(bpath, 'w')
 								pprint.pprint(block, fd)
@@ -811,10 +814,27 @@ def server(lip, lport):
 						if cref == 0:
 							mm.seek(offset)
 							mm.write(struct.pack('>I', 0))
-							print('locks', link['locks'])
 							link['locks'].remove(offset)
 					
 					data = struct.pack('>BQQ', PktCodeServer.BlockUnlockSuccess, vector, offset)
+					data, _tmp = BuildEncryptedMessage(link, data)
+					link['outgoing'][_tmp] = (_tmp, 0, data)
+					continue
+					
+				if type == PktCodeClient.BlockLockInit:
+					offset = struct.unpack_from('>Q', data)[0]
+					lockinit = block['lockinit']
+					
+					if offset not in lockinit:
+						print('initialized lock offset:%x' % offset)
+						lockinit.append(offset)
+						# set the lock to the unreleased state
+						mm.seek(offset)
+						mm.write(struct.pack('>II', 0, 0))
+					else:
+						print('lock already initialized offset:%x' % offset)
+					# send a reply letting them know the operation has completed
+					data = struct.pack('>BQ', PktCodeServer.BlockLockSuccess, vector)
 					data, _tmp = BuildEncryptedMessage(link, data)
 					link['outgoing'][_tmp] = (_tmp, 0, data)
 					continue
@@ -833,7 +853,7 @@ def server(lip, lport):
 					cref = struct.unpack('>I', mm.read(4))[0]
 					_lid = struct.unpack('>I', lid)[0]
 					
-					print('cval:%x cref:%x lid:%x\n' % (cval, cref, _lid))
+					#print('cval:%x cref:%x lid:%x' % (cval, cref, _lid))
 					
 					# check if we own the lock, or if nobody owns it
 					if cval == _lid or cval == 0:
@@ -850,7 +870,7 @@ def server(lip, lport):
 								link['locks'].append(offset)
 						continue
 					
-					print('someone else holds lock')
+					#print('someone else holds lock')
 					# somebody else owned the lock
 					data = struct.pack('>BQ', PktCodeServer.BlockLockFailed, vector)
 					data, _tmp = BuildEncryptedMessage(link, data)

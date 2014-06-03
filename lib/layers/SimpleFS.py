@@ -12,18 +12,26 @@ class SimpleFS(lib.layers.interface.BasicFS):
 		self.cs = cs
 		self.client = cs.GetClient()
 		self.metabase = 500
-		
 		self.dbgf = None
 	
 	def ReleaseLock(self):
 		client = self.client
 		client.BlockUnlock(self.metabase + 8)
 		
+	'''
+		@sdescription: 		Needs to be called before anything else. This will ensure
+		@+:					that the lock has been properly initialized in the event
+		@+:					of a previous server crash.
+	'''
+	def InitLock(self):
+		self.client.InitLock(self.metabase + 8)
+		
 	def TryLock(self):
 		client = self.client
-		
+		#print('trying lock')
 		if client.BlockLock(self.metabase + 8) is True:
 			return True
+		#print('		lock exception')
 		raise LockFailedException()
 		
 	def IsFormatted(self):

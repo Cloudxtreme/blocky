@@ -87,10 +87,17 @@ class SymCrypt:
 		
 			mi = mi - 1
 		return bytes(data)
-		
+			
+	'''
+		@sdescription:		This will encrypt the data using the specified
+		@+:					key during creation of the SymCrypt class.
+	'''
 	def crypt(self, data):
 		return self.mix(self.__both(data))
-		
+	'''
+		@sdescription:		This will decrypt the data using the specified
+		@+:					key during creation of the SymCrypt class.
+	'''
 	def decrypt(self, data):
 		return self.__both(self.unmix(data))
 	
@@ -112,6 +119,7 @@ class PktCodeClient:
 	FlushWriteHold	 	= 14
 	Ack					= 15
 	Copy				= 16
+	BlockLockInit		= 17
 		
 class PktCodeServer:
 	PublicKey			= 0
